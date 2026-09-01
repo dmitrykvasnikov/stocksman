@@ -1,0 +1,49 @@
+# Project Decisions
+
+This file records durable product and architecture decisions. New entries should include the decision, rationale, and date when useful.
+
+## D001 — Read-only first milestone
+
+The first milestone is limited to Binance Spot public market data, historical backfill, live candlesticks, multiple chart tabs, and safe custom signal visualization.
+
+Out of scope: accounts, API keys, balances, portfolios, alerts, notifications, order placement, and automated trading.
+
+## D002 — Desktop shape and stack
+
+Use Tauri 2 with React/TypeScript for the desktop shell and Rust/Tokio for the local backend/core. The app must remain portable to Windows and Linux.
+
+## D003 — Local backend sidecar
+
+Tauri starts and supervises a private backend sidecar over loopback. The backend owns provider connectivity and domain logic. It is not exposed to the local network. This keeps deployment local while preserving a clean path to hosted deployment.
+
+## D004 — Persistence
+
+Use SQLite for signals, chains, enabled states, tab configuration, and user preferences. Do not persist historical market data in the first release; cache it in memory and fetch it on demand.
+
+## D005 — Provider boundary
+
+Binance-specific transport and types stay inside the Binance adapter. The chart and signal engine consume only canonical candles and provider-neutral interfaces.
+
+## D006 — Initial market scope
+
+Start with BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, and XRPUSDT. Treat this as replaceable configuration rather than a permanent popularity claim. Expose every interval supported by the adapter.
+
+## D007 — Candle and signal semantics
+
+Signals evaluate fixed-length contiguous windows of closed candles. `C1` is oldest and `CN` newest. Official markers anchor to the newest candle; optional span highlighting covers the complete window. Open-candle revisions may invalidate provisional evaluation, but do not create official markers.
+
+## D008 — Chain semantics
+
+Chains are ordered and non-overlapping. The gap is the number of complete candles strictly between the previous signal’s ending candle and the next signal’s starting candle. Supported modes are `exactly K` and `up to K` (`0..K`). Results are deterministic.
+
+## D009 — Safe DSL execution
+
+Signal text is parsed into a versioned AST and evaluated by an explicit interpreter. `eval` and equivalent dynamic execution are prohibited.
+
+## D010 — Chart library constraint
+
+Select a maintained chart library with a permissive license suitable for redistribution, after verifying candlestick, volume, crosshair, pan/zoom, custom markers, and optional span rendering requirements.
+
+## D011 — Decision logging practice
+
+Keep stable product intent in `DESCRIPTION.md`, active execution work in `PLAN.md`, and durable decisions/rationale here. Use commit messages and test documentation for implementation history rather than appending every development note to the product description.
