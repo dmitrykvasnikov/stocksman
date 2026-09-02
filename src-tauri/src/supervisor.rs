@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     process::Stdio,
     sync::{Arc, RwLock},
     time::Duration,
@@ -41,14 +42,14 @@ struct BackendAnnouncement {
 }
 
 impl BackendSupervisor {
-    pub fn start() -> Self {
+    pub fn start(database_path: PathBuf) -> Self {
         let status = Arc::new(RwLock::new(BackendStatus {
             state: BackendState::Reconnecting,
             endpoint: None,
         }));
         let (shutdown, shutdown_rx) = watch::channel(false);
 
-        tauri::async_runtime::spawn(supervise(status.clone(), shutdown_rx));
+        tauri::async_runtime::spawn(supervise(status.clone(), shutdown_rx, database_path));
 
         Self { status, shutdown }
     }
@@ -71,7 +72,11 @@ impl BackendSupervisor {
     }
 }
 
-async fn supervise(status: Arc<RwLock<BackendStatus>>, mut shutdown: watch::Receiver<bool>) {
+async fn supervise(
+    status: Arc<RwLock<BackendStatus>>,
+    mut shutdown: watch::Receiver<bool>,
+    database_path: PathBuf,
+) {
     loop {
         if *shutdown.borrow() {
             return;
@@ -79,7 +84,7 @@ async fn supervise(status: Arc<RwLock<BackendStatus>>, mut shutdown: watch::Rece
 
         update_status(&status, BackendState::Reconnecting, None);
 
-        match start_backend().await {
+        match start_backend(&database_path).await {
             Ok((mut child, announcement)) => {
                 update_status(
                     &status,
@@ -116,11 +121,12 @@ async fn supervise(status: Arc<RwLock<BackendStatus>>, mut shutdown: watch::Rece
     }
 }
 
-async fn start_backend() -> Result<(Child, BackendAnnouncement), String> {
+async fn start_backend(database_path: &PathBuf) -> Result<(Child, BackendAnnouncement), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("could not locate application executable: {error}"))?;
     let mut child = Command::new(executable)
         .arg("--stocksman-backend")
+        .arg(database_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

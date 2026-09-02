@@ -6,7 +6,7 @@ Trading execution, exchange accounts, API keys, balances, portfolios, alerts, no
 
 ## Development status
 
-The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The next implementation task in [`PLAN.md`](PLAN.md) is SQLite migrations and persisted user configuration.
+The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The backend applies versioned SQLite migrations and persists typed user preferences. The next implementation task in [`PLAN.md`](PLAN.md) is Linux and Windows CI build targets.
 
 ## Required tools
 
@@ -75,6 +75,12 @@ npm run tauri -- dev
 ```
 
 This starts the read-only desktop shell and its private backend companion process. The shell reports backend readiness and restarts the process after an unexpected exit; no Binance credentials are needed.
+
+## Local configuration
+
+The backend creates `stocksman.sqlite3` in the platform application-data directory and applies embedded migrations before reporting ready. The initial configuration document contains theme, locale, and time-zone preferences; omitted locale and time zone values mean “use the system setting.”
+
+The private loopback API exposes `GET /configuration` and `PUT /configuration`. Configuration writes are typed, reject unknown or invalid fields, and are committed to SQLite before a successful response is returned. The database contains configuration only; historical market data remains in-memory for the first release.
 
 ## Build a release package
 

@@ -1,5 +1,8 @@
 mod backend;
+mod database;
 mod supervisor;
+
+use std::path::PathBuf;
 
 use serde::Serialize;
 use supervisor::{BackendStatus, BackendSupervisor};
@@ -25,15 +28,20 @@ fn runtime_info(supervisor: tauri::State<'_, BackendSupervisor>) -> RuntimeInfo 
     current_runtime_info(&supervisor)
 }
 
-pub fn run_backend_sidecar() -> std::io::Result<()> {
-    backend::run()
+pub fn run_backend_sidecar(database_path: PathBuf) -> std::io::Result<()> {
+    backend::run(database_path)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let application = tauri::Builder::default()
         .setup(|application| {
-            application.manage(BackendSupervisor::start());
+            let database_path = application
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("could not resolve application data directory: {error}"))?
+                .join("stocksman.sqlite3");
+            application.manage(BackendSupervisor::start(database_path));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![runtime_info])

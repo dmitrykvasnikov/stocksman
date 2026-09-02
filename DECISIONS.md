@@ -22,6 +22,8 @@ The desktop executable re-launches itself in a dedicated backend mode instead of
 
 Use SQLite for signals, chains, enabled states, tab configuration, and user preferences. Do not persist historical market data in the first release; cache it in memory and fetch it on demand.
 
+Keep the database in the platform application-data directory. The backend applies ordered, embedded SQL migrations before it reports ready and records each applied schema version. Store the evolving user-preference shape as validated, typed JSON in a singleton row so new preferences can be added without exposing provider-specific types to the persistence boundary.
+
 ## D005 — Provider boundary
 
 Binance-specific transport and types stay inside the Binance adapter. The chart and signal engine consume only canonical candles and provider-neutral interfaces.
