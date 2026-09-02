@@ -52,3 +52,29 @@ export type CandleEvent = {
   kind: "upsert";
   candle: Candle;
 };
+
+export async function loadCandleHistory(
+  endpoint: string,
+  request: CandleHistoryRequest,
+  signal?: AbortSignal,
+): Promise<CandleHistoryResponse> {
+  const url = new URL("/market-data/candles", endpoint);
+  url.searchParams.set("provider", request.provider);
+  url.searchParams.set("symbol", request.symbol);
+  url.searchParams.set("interval", request.interval);
+  if (request.start_timestamp !== null) {
+    url.searchParams.set("start_timestamp", String(request.start_timestamp));
+  }
+  if (request.end_timestamp !== null) {
+    url.searchParams.set("end_timestamp", String(request.end_timestamp));
+  }
+  if (request.limit !== null) {
+    url.searchParams.set("limit", String(request.limit));
+  }
+
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`Candle history request failed with status ${response.status}`);
+  }
+  return response.json() as Promise<CandleHistoryResponse>;
+}

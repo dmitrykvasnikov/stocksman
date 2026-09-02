@@ -1,8 +1,10 @@
 use std::{
+    collections::HashMap,
     io::{self, Write},
     net::Ipv4Addr,
     path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
 
 use serde::Serialize;
@@ -11,7 +13,12 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::database::{ConfigurationStore, UserConfiguration};
+use crate::{
+    database::{ConfigurationStore, UserConfiguration},
+    market_data::CandleHistoryRequest,
+    provider::{MarketDataProvider, ProviderError},
+    providers::mock::MockReplayProvider,
+};
 
 const MAX_REQUEST_BYTES: usize = 65_536;
 
@@ -23,6 +30,7 @@ struct BackendAnnouncement {
 struct HttpRequest {
     method: String,
     path: String,
+    origin: Option<String>,
     body: Vec<u8>,
 }
 
@@ -73,19 +81,43 @@ async fn respond(mut stream: TcpStream, store: &ConfigurationStore) -> io::Resul
                 &mut stream,
                 "400 Bad Request",
                 r#"{"error":"invalid_request"}"#,
+                None,
             )
             .await;
         }
         Err(error) => return Err(error),
     };
 
+    let response_origin = request
+        .origin
+        .as_deref()
+        .filter(|origin| is_allowed_origin(origin))
+        .map(str::to_owned);
     let (status, body) = route(request, store);
-    write_response(&mut stream, status, &body).await
+    write_response(&mut stream, status, &body, response_origin.as_deref()).await
+}
+
+fn is_allowed_origin(origin: &str) -> bool {
+    matches!(
+        origin,
+        "http://tauri.localhost"
+            | "tauri://localhost"
+            | "http://127.0.0.1:1420"
+            | "http://localhost:1420"
+    )
 }
 
 fn route(request: HttpRequest, store: &ConfigurationStore) -> (&'static str, String) {
-    match (request.method.as_str(), request.path.as_str()) {
+    let (path, query) = request
+        .path
+        .split_once('?')
+        .map_or((request.path.as_str(), None), |(path, query)| {
+            (path, Some(query))
+        });
+
+    match (request.method.as_str(), path) {
         ("GET", "/health") => ("200 OK", r#"{"state":"ready"}"#.to_owned()),
+        ("GET", "/market-data/candles") => candle_history(query),
         ("GET", "/configuration") => match store.load() {
             Ok(configuration) => json_response(&configuration),
             Err(error) => {
@@ -112,6 +144,90 @@ fn route(request: HttpRequest, store: &ConfigurationStore) -> (&'static str, Str
     }
 }
 
+fn candle_history(query: Option<&str>) -> (&'static str, String) {
+    let parameters = match parse_query(query.unwrap_or_default()) {
+        Some(parameters) => parameters,
+        None => return bad_market_data_request(),
+    };
+    let required = |name: &str| parameters.get(name).cloned();
+    let request = match (
+        required("provider"),
+        required("symbol"),
+        required("interval"),
+    ) {
+        (Some(provider), Some(symbol), Some(interval)) => CandleHistoryRequest {
+            provider,
+            symbol,
+            interval,
+            start_timestamp: match optional_i64(&parameters, "start_timestamp") {
+                Ok(value) => value,
+                Err(()) => return bad_market_data_request(),
+            },
+            end_timestamp: match optional_i64(&parameters, "end_timestamp") {
+                Ok(value) => value,
+                Err(()) => return bad_market_data_request(),
+            },
+            limit: match optional_u32(&parameters, "limit") {
+                Ok(value) => value,
+                Err(()) => return bad_market_data_request(),
+            },
+        },
+        _ => return bad_market_data_request(),
+    };
+
+    let provider = MockReplayProvider::sample(Duration::ZERO);
+    match provider.get_candles(&request) {
+        Ok(response) => json_response(&response),
+        Err(
+            ProviderError::UnknownProvider(_)
+            | ProviderError::UnknownSymbol(_)
+            | ProviderError::UnknownInterval(_),
+        ) => (
+            "404 Not Found",
+            r#"{"error":"market_data_not_found"}"#.to_owned(),
+        ),
+        Err(ProviderError::InvalidRequest(_)) => bad_market_data_request(),
+        Err(error) => {
+            eprintln!("could not load candle history: {error}");
+            internal_error()
+        }
+    }
+}
+
+fn parse_query(query: &str) -> Option<HashMap<String, String>> {
+    let mut parameters = HashMap::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (name, value) = pair.split_once('=')?;
+        if name.is_empty()
+            || value.is_empty()
+            || !matches!(
+                name,
+                "provider" | "symbol" | "interval" | "start_timestamp" | "end_timestamp" | "limit"
+            )
+            || parameters
+                .insert(name.to_owned(), value.to_owned())
+                .is_some()
+        {
+            return None;
+        }
+    }
+    Some(parameters)
+}
+
+fn optional_i64(parameters: &HashMap<String, String>, name: &str) -> Result<Option<i64>, ()> {
+    parameters
+        .get(name)
+        .map(|value| value.parse::<i64>().map_err(|_| ()))
+        .transpose()
+}
+
+fn optional_u32(parameters: &HashMap<String, String>, name: &str) -> Result<Option<u32>, ()> {
+    parameters
+        .get(name)
+        .map(|value| value.parse::<u32>().map_err(|_| ()))
+        .transpose()
+}
+
 fn json_response(value: &impl Serialize) -> (&'static str, String) {
     match serde_json::to_string(value) {
         Ok(body) => ("200 OK", body),
@@ -126,6 +242,13 @@ fn bad_configuration() -> (&'static str, String) {
     (
         "400 Bad Request",
         r#"{"error":"invalid_configuration"}"#.to_owned(),
+    )
+}
+
+fn bad_market_data_request() -> (&'static str, String) {
+    (
+        "400 Bad Request",
+        r#"{"error":"invalid_market_data_request"}"#.to_owned(),
     )
 }
 
@@ -184,13 +307,21 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
         ));
     }
 
-    let content_length = lines
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .map(|(_, value)| value.trim().parse::<usize>())
-        .transpose()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid content length"))?
-        .unwrap_or(0);
+    let mut content_length = 0;
+    let mut origin = None;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            content_length = value.parse::<usize>().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid content length")
+            })?;
+        } else if name.eq_ignore_ascii_case("origin") {
+            origin = Some(value.to_owned());
+        }
+    }
     if header_end + content_length > MAX_REQUEST_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -218,13 +349,22 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
     Ok(HttpRequest {
         method,
         path,
+        origin,
         body: bytes[header_end..header_end + content_length].to_vec(),
     })
 }
 
-async fn write_response(stream: &mut TcpStream, status: &str, body: &str) -> io::Result<()> {
+async fn write_response(
+    stream: &mut TcpStream,
+    status: &str,
+    body: &str,
+    allowed_origin: Option<&str>,
+) -> io::Result<()> {
+    let access_control_headers = allowed_origin.map_or_else(String::new, |origin| {
+        format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n")
+    });
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{access_control_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(response.as_bytes()).await?;
@@ -290,6 +430,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deterministic_mock_candles_are_available_over_http() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind loopback listener");
+
+        let response = request(
+            listener,
+            "GET /market-data/candles?provider=mock&symbol=BTCUSDT&interval=1h&limit=2 HTTP/1.1\r\nHost: localhost\r\nOrigin: http://tauri.localhost\r\n\r\n",
+        )
+        .await;
+        let (_, body) = response.split_once("\r\n\r\n").expect("HTTP response body");
+        let history: crate::market_data::CandleHistoryResponse =
+            serde_json::from_str(body).expect("candle history JSON");
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains("Access-Control-Allow-Origin: http://tauri.localhost\r\n"));
+        assert_eq!(history.candles.len(), 2);
+        assert_eq!(history.candles[0].symbol, "BTCUSDT");
+        assert!(history.candles[0].timestamp < history.candles[1].timestamp);
+    }
+
+    #[test]
+    fn malformed_market_data_queries_are_rejected() {
+        let store = ConfigurationStore::open_in_memory().expect("open database");
+
+        let (missing_status, _) = route(
+            HttpRequest {
+                method: "GET".to_owned(),
+                path: "/market-data/candles?provider=mock&symbol=BTCUSDT".to_owned(),
+                origin: None,
+                body: Vec::new(),
+            },
+            &store,
+        );
+        let (duplicate_status, _) = route(
+            HttpRequest {
+                method: "GET".to_owned(),
+                path: "/market-data/candles?provider=mock&provider=mock&symbol=BTCUSDT&interval=1h"
+                    .to_owned(),
+                origin: None,
+                body: Vec::new(),
+            },
+            &store,
+        );
+
+        assert_eq!(missing_status, "400 Bad Request");
+        assert_eq!(duplicate_status, "400 Bad Request");
+    }
+
+    #[tokio::test]
     async fn invalid_configuration_is_rejected() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
@@ -315,6 +505,7 @@ mod tests {
             HttpRequest {
                 method: "PUT".to_owned(),
                 path: "/configuration".to_owned(),
+                origin: None,
                 body: body.to_vec(),
             },
             &store,
@@ -323,6 +514,7 @@ mod tests {
             HttpRequest {
                 method: "GET".to_owned(),
                 path: "/configuration".to_owned(),
+                origin: None,
                 body: Vec::new(),
             },
             &store,

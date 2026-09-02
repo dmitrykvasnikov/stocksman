@@ -20,12 +20,12 @@ Acceptance criteria:
 
 - [x] Implement a mock/replay provider.
 - [x] Implement the in-memory candle store, ordering, deduplication, and gap detection.
-- [ ] Render a basic candlestick and volume chart.
+- [x] Render a basic candlestick and volume chart.
 - [ ] Support one configurable chart tab.
 
 Acceptance criteria:
 
-- [ ] A deterministic candle replay renders without Binance or network access.
+- [x] A deterministic candle replay renders without Binance or network access.
 - [ ] Duplicate and out-of-order events produce one correctly ordered candle series.
 - [ ] The chart can pan, zoom, reset, and inspect OHLCV values.
 
