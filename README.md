@@ -6,7 +6,7 @@ Trading execution, exchange accounts, API keys, balances, portfolios, alerts, no
 
 ## Development status
 
-The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The backend applies versioned SQLite migrations and persists typed user preferences. Continuous integration verifies clean Linux and Windows desktop builds. The next implementation task in [`PLAN.md`](PLAN.md) is the provider-neutral API and canonical candle model.
+The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The backend applies versioned SQLite migrations and persists typed user preferences. Provider-neutral market-data contracts now define instruments, intervals, candle history, live upserts, and validated canonical candles. Continuous integration verifies Linux and Windows desktop builds. The next implementation task in [`PLAN.md`](PLAN.md) is the offline mock/replay provider.
 
 ## Required tools
 

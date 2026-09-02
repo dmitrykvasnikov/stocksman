@@ -8,7 +8,7 @@ This plan turns the read-only Binance Spot charting workbench discovery into sma
 - [x] Start and supervise a private local backend sidecar over loopback.
 - [x] Add SQLite migrations and persisted user configuration.
 - [x] Add Linux and Windows CI build targets.
-- [ ] Define provider-neutral API DTOs and canonical candle types.
+- [x] Define provider-neutral API DTOs and canonical candle types.
 
 Acceptance criteria:
 

@@ -51,3 +51,11 @@ Select a maintained chart library with a permissive license suitable for redistr
 ## D011 — Decision logging practice
 
 Keep stable product intent in `DESCRIPTION.md`, active execution work in `PLAN.md`, and durable decisions/rationale here. Use commit messages and test documentation for implementation history rather than appending every development note to the product description.
+
+## D012 — Canonical market-data contract
+
+Provider adapters and the frontend exchange provider-neutral DTOs for instruments, intervals, candle history, stream selection, and candle upserts. Canonical candles contain provider, symbol, interval, UTC opening timestamp, OHLCV values, and closed state. The interval is part of candle identity so simultaneous timeframes cannot collide.
+
+Timestamps are integer Unix epoch milliseconds and all display localization happens in the frontend. OHLCV values use finite IEEE-754 numbers because the first milestone is charting and deterministic signal evaluation rather than accounting or order execution. Provider adapters must validate identifiers, timestamps, price ranges, and numeric values while normalizing provider payloads.
+
+Intervals use an opaque identifier plus an amount/unit definition. Month intervals remain calendar units rather than being approximated as a fixed number of milliseconds.
