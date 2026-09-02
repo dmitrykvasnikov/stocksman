@@ -65,3 +65,9 @@ Intervals use an opaque identifier plus an amount/unit definition. Month interva
 The backend includes a provider-neutral mock/replay adapter with fixed instruments, intervals, timestamps, and generated OHLCV values. It performs no network access. Historical queries are timestamp ordered, use inclusive boundaries, and retain the newest matching candles when limited.
 
 Replay subscriptions preserve fixture order rather than sanitizing it. This allows custom fixtures to exercise duplicates, revisions, and out-of-order delivery in the candle store while the built-in development fixture remains stable and valid. Subscription cancellation is explicit and also occurs when its handle is dropped.
+
+## D014 — In-memory candle-store semantics
+
+The provider-neutral candle store keys each series by provider, symbol, and interval, then keys candles by UTC opening timestamp. Inserts may arrive in any order. An exact repeat is a no-op, while a different candle with the same identity is a revision and the most recently received value wins. Ordered snapshots are isolated copies so callers cannot mutate cached state.
+
+Gap detection compares adjacent stored timestamps against the selected interval definition. Seconds through weeks use checked fixed-duration arithmetic; months advance by UTC calendar months and are never approximated as a fixed number of days. Historical batches are validated in full before any candle is stored, preventing partially applied invalid responses.

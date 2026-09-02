@@ -19,7 +19,7 @@ Acceptance criteria:
 ## [ ] Phase 1 — Mock market-data vertical slice
 
 - [x] Implement a mock/replay provider.
-- [ ] Implement the in-memory candle store, ordering, deduplication, and gap detection.
+- [x] Implement the in-memory candle store, ordering, deduplication, and gap detection.
 - [ ] Render a basic candlestick and volume chart.
 - [ ] Support one configurable chart tab.
 

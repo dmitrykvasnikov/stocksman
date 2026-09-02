@@ -1,4 +1,5 @@
 mod backend;
+pub mod candle_store;
 mod database;
 pub mod market_data;
 pub mod provider;
