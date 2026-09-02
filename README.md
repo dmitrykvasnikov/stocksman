@@ -6,7 +6,7 @@ Trading execution, exchange accounts, API keys, balances, portfolios, alerts, no
 
 ## Development status
 
-The Tauri 2 desktop scaffold is in place with a React/TypeScript frontend and a Rust/Tokio core. The next implementation task in [`PLAN.md`](PLAN.md) is the private local backend sidecar.
+The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The next implementation task in [`PLAN.md`](PLAN.md) is SQLite migrations and persisted user configuration.
 
 ## Required tools
 
@@ -74,7 +74,7 @@ rustup default stable
 npm run tauri -- dev
 ```
 
-This currently starts the read-only desktop shell and verifies the Tauri-to-Tokio command bridge. Starting and supervising the private backend sidecar is the next Phase 0 task; no Binance credentials are needed.
+This starts the read-only desktop shell and its private backend companion process. The shell reports backend readiness and restarts the process after an unexpected exit; no Binance credentials are needed.
 
 ## Build a release package
 

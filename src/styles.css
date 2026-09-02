@@ -94,6 +94,11 @@ a {
   box-shadow: 0 0 0 4px rgb(82 223 184 / 10%);
 }
 
+.runtime-status--reconnecting .status-dot {
+  background: #f4c76a;
+  box-shadow: 0 0 0 4px rgb(244 199 106 / 10%);
+}
+
 .runtime-status--unavailable .status-dot {
   background: #ff8078;
   box-shadow: 0 0 0 4px rgb(255 128 120 / 10%);

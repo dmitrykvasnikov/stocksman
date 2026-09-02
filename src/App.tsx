@@ -1,19 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 
-type RuntimeState = "checking" | "ready" | "browser" | "unavailable";
+type BackendState = "reconnecting" | "ready" | "unavailable";
+type RuntimeState = BackendState | "browser";
 
 interface RuntimeInfo {
   application: string;
   runtime: string;
-  state: "ready";
+  backend: {
+    state: BackendState;
+    endpoint: string | null;
+  };
 }
 
 const statusCopy: Record<RuntimeState, string> = {
-  checking: "Checking desktop runtime…",
-  ready: "Desktop shell ready",
+  reconnecting: "Backend reconnecting…",
+  ready: "Backend ready",
   browser: "Browser preview",
-  unavailable: "Desktop runtime unavailable",
+  unavailable: "Backend unavailable",
 };
 
 function isTauriRuntime(): boolean {
@@ -22,7 +26,7 @@ function isTauriRuntime(): boolean {
 
 export default function App() {
   const [runtimeState, setRuntimeState] = useState<RuntimeState>(() =>
-    isTauriRuntime() ? "checking" : "browser",
+    isTauriRuntime() ? "reconnecting" : "browser",
   );
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
 
@@ -31,12 +35,30 @@ export default function App() {
       return;
     }
 
-    void invoke<RuntimeInfo>("runtime_info")
-      .then((info) => {
-        setRuntimeInfo(info);
-        setRuntimeState("ready");
-      })
-      .catch(() => setRuntimeState("unavailable"));
+    let active = true;
+
+    const refreshBackendState = () => {
+      void invoke<RuntimeInfo>("runtime_info")
+        .then((info) => {
+          if (active) {
+            setRuntimeInfo(info);
+            setRuntimeState(info.backend.state);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setRuntimeState("unavailable");
+          }
+        });
+    };
+
+    refreshBackendState();
+    const refreshTimer = window.setInterval(refreshBackendState, 1_000);
+
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+    };
   }, []);
 
   return (
@@ -72,7 +94,7 @@ export default function App() {
             <strong>Tauri 2</strong>
           </div>
           <div>
-            <span className="card-label">Core runtime</span>
+            <span className="card-label">Backend</span>
             <strong>{runtimeInfo?.runtime ?? "Rust + Tokio"}</strong>
           </div>
         </div>

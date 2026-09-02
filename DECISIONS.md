@@ -16,6 +16,8 @@ Use Tauri 2 with React/TypeScript for the desktop shell and Rust/Tokio for the l
 
 Tauri starts and supervises a private backend sidecar over loopback. The backend owns provider connectivity and domain logic. It is not exposed to the local network. This keeps deployment local while preserving a clean path to hosted deployment.
 
+The desktop executable re-launches itself in a dedicated backend mode instead of shipping a second executable. The child process binds an OS-assigned `127.0.0.1` port, reports readiness to its parent, and is restarted after unexpected termination. This preserves process isolation while keeping Linux and Windows packaging simple.
+
 ## D004 — Persistence
 
 Use SQLite for signals, chains, enabled states, tab configuration, and user preferences. Do not persist historical market data in the first release; cache it in memory and fetch it on demand.

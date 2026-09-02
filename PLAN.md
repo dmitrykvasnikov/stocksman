@@ -5,15 +5,15 @@ This plan turns the read-only Binance Spot charting workbench discovery into sma
 ## [ ] Phase 0 — Foundation
 
 - [x] Scaffold Tauri 2, React, TypeScript, Rust, and Tokio.
-- [ ] Start and supervise a private local backend sidecar over loopback.
+- [x] Start and supervise a private local backend sidecar over loopback.
 - [ ] Add SQLite migrations and persisted user configuration.
 - [ ] Add Linux and Windows CI build targets.
 - [ ] Define provider-neutral API DTOs and canonical candle types.
 
 Acceptance criteria:
 
-- [ ] The desktop shell starts the backend and reports ready, reconnecting, and unavailable states.
-- [ ] The backend is reachable only through loopback.
+- [x] The desktop shell starts the backend and reports ready, reconnecting, and unavailable states.
+- [x] The backend is reachable only through loopback.
 - [ ] A clean build is reproducible on Linux and has a Windows CI target.
 
 ## [ ] Phase 1 — Mock market-data vertical slice
