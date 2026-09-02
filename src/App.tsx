@@ -224,7 +224,7 @@ export default function App() {
 
         <div className="chart-card">
           {candles.length > 0 ? (
-            <CandlestickChart candles={candles} />
+            <CandlestickChart key={`${symbol}-${interval}`} candles={candles} />
           ) : (
             <div className="chart-empty" role="status">
               <div className="chart-empty-grid" aria-hidden="true" />

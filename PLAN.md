@@ -16,7 +16,7 @@ Acceptance criteria:
 - [x] The backend is reachable only through loopback.
 - [x] A clean build is reproducible on Linux.
 
-## [ ] Phase 1 — Mock market-data vertical slice
+## [x] Phase 1 — Mock market-data vertical slice
 
 - [x] Implement a mock/replay provider.
 - [x] Implement the in-memory candle store, ordering, deduplication, and gap detection.
@@ -27,7 +27,7 @@ Acceptance criteria:
 
 - [x] A deterministic candle replay renders without Binance or network access.
 - [x] Duplicate and out-of-order events produce one correctly ordered candle series.
-- [ ] The chart can pan, zoom, reset, and inspect OHLCV values.
+- [x] The chart can pan, zoom, reset, and inspect OHLCV values.
 
 ## [ ] Phase 2 — Binance Spot adapter
 
