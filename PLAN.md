@@ -26,7 +26,7 @@ Acceptance criteria:
 Acceptance criteria:
 
 - [x] A deterministic candle replay renders without Binance or network access.
-- [ ] Duplicate and out-of-order events produce one correctly ordered candle series.
+- [x] Duplicate and out-of-order events produce one correctly ordered candle series.
 - [ ] The chart can pan, zoom, reset, and inspect OHLCV values.
 
 ## [ ] Phase 2 — Binance Spot adapter

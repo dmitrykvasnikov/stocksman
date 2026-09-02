@@ -16,7 +16,7 @@ Historical queries return timestamp-ordered candles with inclusive time bounds a
 
 The desktop chart requests canonical history from `GET /market-data/candles` on the private loopback backend. The endpoint accepts `provider`, `symbol`, and `interval`, plus optional `start_timestamp`, `end_timestamp`, and `limit` query parameters. The chart tab loads provider-neutral instruments and intervals from `GET /market-data/catalog`, and its symbol and timeframe selectors request the newest 80 candles for the selected series. Tab persistence and multiple independent tabs remain part of the later chart-workbench phase.
 
-The provider-neutral in-memory store accepts historical batches and live upserts. A batch is fully validated before it changes the cache. Snapshots are ordered by UTC opening timestamp, and a later value for the same provider, symbol, interval, and timestamp replaces the earlier revision. Gap detection uses the provider's interval definition, including real UTC calendar-month boundaries.
+The provider-neutral in-memory store accepts historical batches and live upserts. A batch is fully validated before it changes the cache. Snapshots are ordered by UTC opening timestamp, exact duplicate events are ignored, and a later value for the same provider, symbol, interval, and timestamp replaces the earlier revision. An integration test feeds deliberately duplicated and out-of-order mock replay events through this boundary and verifies the resulting ordered series. Gap detection uses the provider's interval definition, including real UTC calendar-month boundaries.
 
 ## Required tools
 

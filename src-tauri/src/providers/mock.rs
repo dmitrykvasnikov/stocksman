@@ -320,9 +320,12 @@ fn sample_candles(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use tokio::{sync::mpsc, time::timeout};
 
     use super::*;
+    use crate::candle_store::{CandleStore, UpsertOutcome};
 
     fn request(symbol: &str, interval: &str) -> CandleHistoryRequest {
         CandleHistoryRequest {
@@ -460,6 +463,77 @@ mod tests {
         assert_eq!(
             observed,
             vec![(120_000, 2.0), (60_000, 1.0), (120_000, 2.5)]
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_events_form_one_correctly_ordered_candle_series() {
+        let provider = MockReplayProvider::new(
+            vec![instrument()],
+            vec![interval()],
+            vec![
+                candle(180_000, 3.0),
+                candle(60_000, 1.0),
+                candle(180_000, 3.0),
+                candle(180_000, 3.5),
+                candle(120_000, 2.0),
+            ],
+            Duration::ZERO,
+        )
+        .expect("provider");
+        let stream = CandleStream {
+            provider: MOCK_PROVIDER_ID.to_owned(),
+            symbol: "BTCUSDT".to_owned(),
+            interval: "1m".to_owned(),
+        };
+        let store = Arc::new(Mutex::new(CandleStore::new()));
+        let callback_store = Arc::clone(&store);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let _subscription = provider
+            .subscribe_candles(
+                &stream,
+                Arc::new(move |event| {
+                    let outcome = callback_store
+                        .lock()
+                        .expect("candle store lock")
+                        .apply(event)
+                        .expect("valid replay event");
+                    sender.send(outcome).expect("outcome receiver remains open");
+                }),
+            )
+            .expect("subscription");
+
+        let mut outcomes = Vec::new();
+        for _ in 0..5 {
+            outcomes.push(
+                timeout(Duration::from_secs(1), receiver.recv())
+                    .await
+                    .expect("event arrives")
+                    .expect("replay remains open"),
+            );
+        }
+
+        assert_eq!(
+            outcomes,
+            vec![
+                UpsertOutcome::Inserted,
+                UpsertOutcome::Inserted,
+                UpsertOutcome::Duplicate,
+                UpsertOutcome::Revised,
+                UpsertOutcome::Inserted,
+            ]
+        );
+        let observed = store
+            .lock()
+            .expect("candle store lock")
+            .candles(&stream)
+            .expect("ordered candle snapshot")
+            .into_iter()
+            .map(|candle| (candle.timestamp, candle.close))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observed,
+            vec![(60_000, 1.0), (120_000, 2.0), (180_000, 3.5)]
         );
     }
 
