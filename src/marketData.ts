@@ -48,10 +48,33 @@ export interface CandleHistoryResponse {
   candles: Candle[];
 }
 
+export interface MarketDataCatalog {
+  instruments: Instrument[];
+  intervals: IntervalDefinition[];
+}
+
 export type CandleEvent = {
   kind: "upsert";
   candle: Candle;
 };
+
+async function readJson<T>(url: URL, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`Market-data request failed with status ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export function loadMarketDataCatalog(
+  endpoint: string,
+  provider: string,
+  signal?: AbortSignal,
+): Promise<MarketDataCatalog> {
+  const url = new URL("/market-data/catalog", endpoint);
+  url.searchParams.set("provider", provider);
+  return readJson(url, signal);
+}
 
 export async function loadCandleHistory(
   endpoint: string,
@@ -72,9 +95,5 @@ export async function loadCandleHistory(
     url.searchParams.set("limit", String(request.limit));
   }
 
-  const response = await fetch(url, { signal });
-  if (!response.ok) {
-    throw new Error(`Candle history request failed with status ${response.status}`);
-  }
-  return response.json() as Promise<CandleHistoryResponse>;
+  return readJson(url, signal);
 }

@@ -25,7 +25,8 @@ body {
 }
 
 button,
-a {
+a,
+select {
   font: inherit;
 }
 
@@ -115,6 +116,35 @@ footer {
   padding: 34px 0 52px;
 }
 
+.chart-tabs {
+  display: flex;
+  min-height: 43px;
+  align-items: end;
+  margin-bottom: 24px;
+  border-bottom: 1px solid #1c2635;
+}
+
+.chart-tab {
+  display: inline-flex;
+  min-width: 150px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 15px 11px;
+  border: 0;
+  border-bottom: 2px solid #58dfc2;
+  color: #d9e3f1;
+  background: rgb(54 190 161 / 7%);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.chart-tab small {
+  color: #6d7a90;
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
 .workbench-heading {
   display: flex;
   align-items: end;
@@ -148,12 +178,49 @@ h1 {
   font-weight: 560;
 }
 
+.chart-controls {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+
+.chart-controls label {
+  display: grid;
+  gap: 6px;
+}
+
+.chart-controls label > span {
+  color: #5f6d83;
+  font-size: 0.62rem;
+  font-weight: 760;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.chart-controls select {
+  min-width: 142px;
+  padding: 9px 34px 9px 11px;
+  border: 1px solid #263246;
+  border-radius: 8px;
+  color: #c5d0df;
+  outline: none;
+  background: #0d131d;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.chart-controls select:hover,
+.chart-controls select:focus-visible {
+  border-color: #3e8d82;
+}
+
 .feed-badge {
   display: flex;
   flex-direction: column;
   align-items: end;
   gap: 5px;
-  padding-bottom: 3px;
+  min-width: 132px;
+  padding: 0 0 3px 8px;
 }
 
 .feed-badge span {
@@ -334,6 +401,24 @@ footer {
 
   .feed-badge {
     display: none;
+  }
+
+  .workbench-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .chart-controls {
+    width: 100%;
+  }
+
+  .chart-controls label {
+    flex: 1;
+  }
+
+  .chart-controls select {
+    width: 100%;
+    min-width: 0;
   }
 
   .chart-card,

@@ -79,6 +79,13 @@ pub struct CandleHistoryResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarketDataCatalog {
+    pub instruments: Vec<Instrument>,
+    pub intervals: Vec<IntervalDefinition>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CandleEvent {
     Upsert { candle: Candle },

@@ -15,7 +15,7 @@ use tokio::{
 
 use crate::{
     database::{ConfigurationStore, UserConfiguration},
-    market_data::CandleHistoryRequest,
+    market_data::{CandleHistoryRequest, MarketDataCatalog},
     provider::{MarketDataProvider, ProviderError},
     providers::mock::MockReplayProvider,
 };
@@ -117,6 +117,7 @@ fn route(request: HttpRequest, store: &ConfigurationStore) -> (&'static str, Str
 
     match (request.method.as_str(), path) {
         ("GET", "/health") => ("200 OK", r#"{"state":"ready"}"#.to_owned()),
+        ("GET", "/market-data/catalog") => market_data_catalog(query),
         ("GET", "/market-data/candles") => candle_history(query),
         ("GET", "/configuration") => match store.load() {
             Ok(configuration) => json_response(&configuration),
@@ -141,6 +142,32 @@ fn route(request: HttpRequest, store: &ConfigurationStore) -> (&'static str, Str
             }
         }
         _ => ("404 Not Found", r#"{"error":"not_found"}"#.to_owned()),
+    }
+}
+
+fn market_data_catalog(query: Option<&str>) -> (&'static str, String) {
+    let parameters = match parse_query(query.unwrap_or_default()) {
+        Some(parameters) if parameters.len() == 1 => parameters,
+        _ => return bad_market_data_request(),
+    };
+    let Some(provider_id) = parameters.get("provider") else {
+        return bad_market_data_request();
+    };
+
+    let provider = MockReplayProvider::sample(Duration::ZERO);
+    if provider_id != provider.id() {
+        return (
+            "404 Not Found",
+            r#"{"error":"market_data_not_found"}"#.to_owned(),
+        );
+    }
+
+    match (provider.list_symbols(), provider.list_intervals()) {
+        (Ok(instruments), Ok(intervals)) => json_response(&MarketDataCatalog {
+            instruments,
+            intervals,
+        }),
+        _ => internal_error(),
     }
 }
 
@@ -451,6 +478,28 @@ mod tests {
         assert!(history.candles[0].timestamp < history.candles[1].timestamp);
     }
 
+    #[tokio::test]
+    async fn mock_catalog_is_available_over_http() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind loopback listener");
+
+        let response = request(
+            listener,
+            "GET /market-data/catalog?provider=mock HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        )
+        .await;
+        let (_, body) = response.split_once("\r\n\r\n").expect("HTTP response body");
+        let catalog: MarketDataCatalog =
+            serde_json::from_str(body).expect("market-data catalog JSON");
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(catalog.instruments.len(), 5);
+        assert_eq!(catalog.instruments[0].symbol, "BTCUSDT");
+        assert_eq!(catalog.intervals.len(), 4);
+        assert_eq!(catalog.intervals[2].id, "1h");
+    }
+
     #[test]
     fn malformed_market_data_queries_are_rejected() {
         let store = ConfigurationStore::open_in_memory().expect("open database");
@@ -474,9 +523,19 @@ mod tests {
             },
             &store,
         );
+        let (extra_catalog_status, _) = route(
+            HttpRequest {
+                method: "GET".to_owned(),
+                path: "/market-data/catalog?provider=mock&symbol=BTCUSDT".to_owned(),
+                origin: None,
+                body: Vec::new(),
+            },
+            &store,
+        );
 
         assert_eq!(missing_status, "400 Bad Request");
         assert_eq!(duplicate_status, "400 Bad Request");
+        assert_eq!(extra_catalog_status, "400 Bad Request");
     }
 
     #[tokio::test]

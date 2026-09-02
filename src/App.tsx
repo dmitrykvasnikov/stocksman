@@ -2,7 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 
 import CandlestickChart from "./CandlestickChart";
-import { loadCandleHistory, type Candle } from "./marketData";
+import {
+  loadCandleHistory,
+  loadMarketDataCatalog,
+  type Candle,
+  type MarketDataCatalog,
+} from "./marketData";
 
 type BackendState = "reconnecting" | "ready" | "unavailable";
 type RuntimeState = BackendState | "browser";
@@ -23,6 +28,22 @@ const statusCopy: Record<RuntimeState, string> = {
   unavailable: "Backend unavailable",
 };
 
+const PROVIDER = "mock";
+const DEFAULT_SYMBOL = "BTCUSDT";
+const DEFAULT_INTERVAL = "1h";
+
+const fallbackCatalog: MarketDataCatalog = {
+  instruments: [
+    {
+      provider: PROVIDER,
+      symbol: DEFAULT_SYMBOL,
+      base_asset: "BTC",
+      quote_asset: "USDT",
+    },
+  ],
+  intervals: [{ id: DEFAULT_INTERVAL, label: "1 hour", amount: 1, unit: "hour" }],
+};
+
 function isTauriRuntime(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
@@ -32,6 +53,9 @@ export default function App() {
     isTauriRuntime() ? "reconnecting" : "browser",
   );
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
+  const [catalog, setCatalog] = useState<MarketDataCatalog>(fallbackCatalog);
+  const [symbol, setSymbol] = useState(DEFAULT_SYMBOL);
+  const [interval, setInterval] = useState(DEFAULT_INTERVAL);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [chartError, setChartError] = useState(false);
 
@@ -72,12 +96,29 @@ export default function App() {
     }
 
     const controller = new AbortController();
+    void loadMarketDataCatalog(backendEndpoint, PROVIDER, controller.signal)
+      .then(setCatalog)
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setChartError(true);
+        }
+      });
+
+    return () => controller.abort();
+  }, [backendEndpoint]);
+
+  useEffect(() => {
+    if (!backendEndpoint) {
+      return;
+    }
+
+    const controller = new AbortController();
     void loadCandleHistory(
       backendEndpoint,
       {
-        provider: "mock",
-        symbol: "BTCUSDT",
-        interval: "1h",
+        provider: PROVIDER,
+        symbol,
+        interval,
         start_timestamp: null,
         end_timestamp: null,
         limit: 80,
@@ -95,7 +136,14 @@ export default function App() {
       });
 
     return () => controller.abort();
-  }, [backendEndpoint]);
+  }, [backendEndpoint, interval, symbol]);
+
+  const selectedInstrument =
+    catalog.instruments.find((instrument) => instrument.symbol === symbol) ??
+    fallbackCatalog.instruments[0];
+  const selectedInterval =
+    catalog.intervals.find((definition) => definition.id === interval) ??
+    fallbackCatalog.intervals[0];
 
   return (
     <main className="shell">
@@ -113,15 +161,64 @@ export default function App() {
       </header>
 
       <section className="workbench" aria-labelledby="chart-title">
+        <div className="chart-tabs" role="tablist" aria-label="Chart tabs">
+          <button className="chart-tab" type="button" role="tab" aria-selected="true">
+            <span>
+              {selectedInstrument.base_asset} / {selectedInstrument.quote_asset}
+            </span>
+            <small>{selectedInterval.id}</small>
+          </button>
+        </div>
+
         <div className="workbench-heading">
           <div>
             <p className="eyebrow">Read-only market workbench</p>
-            <h1 id="chart-title">BTC / USDT</h1>
-            <p className="market-meta">Bitcoin · Mock replay · 1 hour</p>
+            <h1 id="chart-title">
+              {selectedInstrument.base_asset} / {selectedInstrument.quote_asset}
+            </h1>
+            <p className="market-meta">
+              {selectedInstrument.symbol} · Mock replay · {selectedInterval.label}
+            </p>
           </div>
-          <div className="feed-badge">
-            <span>OFFLINE DATA</span>
-            <strong>Deterministic replay</strong>
+          <div className="chart-controls" aria-label="Chart configuration">
+            <label>
+              <span>Symbol</span>
+              <select
+                value={symbol}
+                onChange={(event) => {
+                  setCandles([]);
+                  setChartError(false);
+                  setSymbol(event.target.value);
+                }}
+              >
+                {catalog.instruments.map((instrument) => (
+                  <option key={instrument.symbol} value={instrument.symbol}>
+                    {instrument.base_asset} / {instrument.quote_asset}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Timeframe</span>
+              <select
+                value={interval}
+                onChange={(event) => {
+                  setCandles([]);
+                  setChartError(false);
+                  setInterval(event.target.value);
+                }}
+              >
+                {catalog.intervals.map((definition) => (
+                  <option key={definition.id} value={definition.id}>
+                    {definition.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="feed-badge">
+              <span>OFFLINE DATA</span>
+              <strong>Deterministic replay</strong>
+            </div>
           </div>
         </div>
 
