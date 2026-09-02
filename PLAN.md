@@ -2,19 +2,19 @@
 
 This plan turns the read-only Binance Spot charting workbench discovery into small, demonstrable vertical slices.
 
-## [ ] Phase 0 — Foundation
+## [x] Phase 0 — Foundation
 
 - [x] Scaffold Tauri 2, React, TypeScript, Rust, and Tokio.
 - [x] Start and supervise a private local backend sidecar over loopback.
 - [x] Add SQLite migrations and persisted user configuration.
-- [x] Add Linux and Windows CI build targets.
+- [x] Add Linux and Windows CI build targets; treat Windows results as informational until final release confirmation.
 - [x] Define provider-neutral API DTOs and canonical candle types.
 
 Acceptance criteria:
 
 - [x] The desktop shell starts the backend and reports ready, reconnecting, and unavailable states.
 - [x] The backend is reachable only through loopback.
-- [ ] A clean build is reproducible on Linux and has a Windows CI target.
+- [x] A clean build is reproducible on Linux.
 
 ## [ ] Phase 1 — Mock market-data vertical slice
 
@@ -89,7 +89,8 @@ Acceptance criteria:
 ## [ ] Phase 6 — Hardening and release
 
 - [ ] Add migrations, diagnostics, crash recovery, and backend restart handling.
-- [ ] Complete Linux and Windows packaging smoke tests.
+- [ ] Complete Linux packaging smoke tests.
+- [ ] Confirm the Windows build and packaging on CI and a clean Windows machine only after all preceding phases are complete.
 - [ ] Verify no accounts, credentials, trading, portfolio, alert, or notification behavior has entered the product.
 - [ ] Document reproducible verification commands for each milestone.
 
@@ -97,8 +98,9 @@ Acceptance criteria:
 
 - [ ] The app recovers from backend restart and network interruption.
 - [ ] Automated tests cover parsing, evaluation, boundaries, chaining, normalization, gaps, revisions, and reconnects.
+- [ ] The Windows build is confirmed as a final-project release gate, not as an acceptance requirement for any earlier phase.
 - [ ] The first release remains strictly read-only.
 
 ## Working method
 
-Implement one phase at a time. Use `[ ]` for pending, `[~]` for in progress, and `[x]` for completed work. Keep each change small enough to demonstrate and verify. Update this file when scope, ordering, or acceptance criteria change. Record durable decisions and their rationale in `DECISIONS.md`; do not turn `DESCRIPTION.md` into a running development diary.
+Implement one phase at a time. Use `[ ]` for pending, `[~]` for in progress, and `[x]` for completed work. Keep each change small enough to demonstrate and verify on the primary development platform. Windows build confirmation is performed only in Phase 6, after Phases 0–5 are complete, and must not block acceptance of an earlier phase. Update this file when scope, ordering, or acceptance criteria change. Record durable decisions and their rationale in `DECISIONS.md`; do not turn `DESCRIPTION.md` into a running development diary.

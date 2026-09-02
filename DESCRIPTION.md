@@ -40,6 +40,10 @@ Suggested initial pairs: `BTCUSDT`, `ETHUSDT`, `BNBUSDT`, `SOLUSDT`, `XRPUSDT`. 
 
 Intervals should be populated from the Binance adapter’s supported-interval metadata. If Binance does not expose this as a runtime endpoint, keep the mapping in the adapter and test it against the provider documentation.
 
+### Platform verification
+
+Intermediate project phases are developed and verified on the primary development platform. Windows portability should be preserved throughout implementation, but a successful Windows build is not an acceptance requirement for those phases. Confirm the Windows build and packaging only in the final hardening and release phase, after all earlier project phases are complete.
+
 ## Signal DSL proposal
 
 The DSL describes one fixed-length candle window. `C1` is the oldest candle and `CN` is the newest. The parser should know `N` from the declared pattern length.
