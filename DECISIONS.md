@@ -59,3 +59,9 @@ Provider adapters and the frontend exchange provider-neutral DTOs for instrument
 Timestamps are integer Unix epoch milliseconds and all display localization happens in the frontend. OHLCV values use finite IEEE-754 numbers because the first milestone is charting and deterministic signal evaluation rather than accounting or order execution. Provider adapters must validate identifiers, timestamps, price ranges, and numeric values while normalizing provider payloads.
 
 Intervals use an opaque identifier plus an amount/unit definition. Month intervals remain calendar units rather than being approximated as a fixed number of milliseconds.
+
+## D013 — Deterministic offline provider
+
+The backend includes a provider-neutral mock/replay adapter with fixed instruments, intervals, timestamps, and generated OHLCV values. It performs no network access. Historical queries are timestamp ordered, use inclusive boundaries, and retain the newest matching candles when limited.
+
+Replay subscriptions preserve fixture order rather than sanitizing it. This allows custom fixtures to exercise duplicates, revisions, and out-of-order delivery in the candle store while the built-in development fixture remains stable and valid. Subscription cancellation is explicit and also occurs when its handle is dropped.

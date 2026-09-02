@@ -1,6 +1,8 @@
 mod backend;
 mod database;
 pub mod market_data;
+pub mod provider;
+pub mod providers;
 mod supervisor;
 
 use std::path::PathBuf;

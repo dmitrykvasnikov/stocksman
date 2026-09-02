@@ -6,7 +6,13 @@ Trading execution, exchange accounts, API keys, balances, portfolios, alerts, no
 
 ## Development status
 
-The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The backend applies versioned SQLite migrations and persists typed user preferences. Provider-neutral market-data contracts now define instruments, intervals, candle history, live upserts, and validated canonical candles. Continuous integration verifies Linux and Windows desktop builds. The next implementation task in [`PLAN.md`](PLAN.md) is the offline mock/replay provider.
+The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The backend applies versioned SQLite migrations and persists typed user preferences. Provider-neutral market-data contracts define instruments, intervals, candle history, live upserts, and validated canonical candles. An offline mock provider supplies deterministic history and replay streams for the five initial symbols without network access. Continuous integration verifies Linux and Windows desktop builds. The next implementation task in [`PLAN.md`](PLAN.md) is the in-memory candle store.
+
+## Offline market data
+
+The built-in `mock` provider exposes BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, and XRPUSDT with fixed 1-minute, 5-minute, 1-hour, and 1-day datasets. Each symbol and interval has 120 generated candles anchored to a fixed UTC timestamp, so repeated test and development runs receive identical values.
+
+Historical queries return timestamp-ordered candles with inclusive time bounds and retain the newest candles when a limit is supplied. Replay subscriptions emit fixture events in their original order at a configurable cadence; custom fixtures can therefore reproduce duplicates, revisions, and out-of-order events for the candle-store work.
 
 ## Required tools
 
