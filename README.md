@@ -6,7 +6,7 @@ Trading execution, exchange accounts, API keys, balances, portfolios, alerts, no
 
 ## Development status
 
-The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The backend applies versioned SQLite migrations and persists typed user preferences. The next implementation task in [`PLAN.md`](PLAN.md) is Linux and Windows CI build targets.
+The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The backend applies versioned SQLite migrations and persists typed user preferences. Continuous integration verifies clean Linux and Windows desktop builds. The next implementation task in [`PLAN.md`](PLAN.md) is the provider-neutral API and canonical candle model.
 
 ## Required tools
 
@@ -89,6 +89,12 @@ npm run tauri -- build --no-bundle
 ```
 
 This produces an unbundled native executable. Installer/package generation stays disabled until the packaging work is implemented and verified for the target platforms.
+
+## Continuous integration
+
+The GitHub Actions workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pinned Ubuntu 22.04 and Windows Server 2022 images. Both targets install dependencies from `package-lock.json`, run the frontend and Rust checks, and build the unbundled Tauri desktop application. Rust dependencies are resolved from `src-tauri/Cargo.lock`.
+
+The Linux target installs Tauri's WebKitGTK build dependencies before compiling. The Windows target uses the Visual Studio build tools and WebView2 environment supplied by the GitHub-hosted Windows image. The workflow can run for pushes, pull requests, or manually from GitHub Actions.
 
 ## Verification
 
