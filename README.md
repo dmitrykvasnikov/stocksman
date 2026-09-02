@@ -6,14 +6,14 @@ Trading execution, exchange accounts, API keys, balances, portfolios, alerts, no
 
 ## Development status
 
-The repository currently contains the product and architecture documentation. The Tauri application scaffold is the first implementation task in [`PLAN.md`](PLAN.md).
+The Tauri 2 desktop scaffold is in place with a React/TypeScript frontend and a Rust/Tokio core. The next implementation task in [`PLAN.md`](PLAN.md) is the private local backend sidecar.
 
 ## Required tools
 
 Install these on a clean development machine before building the application:
 
 - Git 2.x or newer.
-- Node.js LTS. The exact supported major version will be recorded here when the frontend scaffold is created.
+- Node.js 20 or newer. The scaffold is verified with Node.js 20.14.
 - npm, included with Node.js. Use the repository lockfile and `npm ci` for reproducible installs.
 - Rust stable through `rustup`, including the `cargo` toolchain.
 - Tauri CLI, installed as the project dependency. Do not rely on a globally installed Tauri CLI.
@@ -50,7 +50,7 @@ The Windows build must be verified in CI and on a clean Windows machine before r
 
 ## Install the project
 
-After the Tauri scaffold is added:
+Install the locked project dependencies:
 
 ```sh
 git clone <repository-url>
@@ -70,23 +70,19 @@ rustup default stable
 
 ## Run in development
 
-Once the application scaffold exists:
-
 ```sh
-npm run tauri dev
+npm run tauri -- dev
 ```
 
-The app should start the private Rust/Tokio backend sidecar automatically. The backend must listen on loopback only; no Binance credentials are needed for the public Spot data milestone.
+This currently starts the read-only desktop shell and verifies the Tauri-to-Tokio command bridge. Starting and supervising the private backend sidecar is the next Phase 0 task; no Binance credentials are needed.
 
 ## Build a release package
 
-Once the application scaffold exists:
-
 ```sh
-npm run tauri build
+npm run tauri -- build --no-bundle
 ```
 
-Build artifacts and platform-specific packaging requirements will be documented here as they become available.
+This produces an unbundled native executable. Installer/package generation stays disabled until the packaging work is implemented and verified for the target platforms.
 
 ## Verification
 
@@ -101,8 +97,8 @@ npm run build
 The exact scripts are part of the scaffold and must be kept synchronized with this README. Rust checks and tests should also be run from the backend workspace, typically with:
 
 ```sh
-cargo fmt --check
-cargo test
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
 ## Keeping this file current

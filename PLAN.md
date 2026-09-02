@@ -4,7 +4,7 @@ This plan turns the read-only Binance Spot charting workbench discovery into sma
 
 ## [ ] Phase 0 — Foundation
 
-- [ ] Scaffold Tauri 2, React, TypeScript, Rust, and Tokio.
+- [x] Scaffold Tauri 2, React, TypeScript, Rust, and Tokio.
 - [ ] Start and supervise a private local backend sidecar over loopback.
 - [ ] Add SQLite migrations and persisted user configuration.
 - [ ] Add Linux and Windows CI build targets.

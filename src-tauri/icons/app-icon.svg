@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Stocksman">
+  <defs>
+    <linearGradient id="background" x1="64" y1="448" x2="448" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0a101a"/>
+      <stop offset="1" stop-color="#122b2d"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <path d="M160 338c26 26 60 39 100 39 55 0 92-27 92-69 0-38-26-58-85-72-45-11-58-20-58-38 0-17 17-29 46-29 31 0 57 10 79 30l18-46c-25-20-56-31-94-33V82h-42v41c-49 10-78 40-78 80 0 39 27 61 84 75 43 10 57 19 57 37 0 18-18 30-48 30-36 0-67-13-92-38l-19 31Z" fill="#65e6ca"/>
+  <path d="M216 390h42v40h-42z" fill="#65e6ca"/>
+</svg>
