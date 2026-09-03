@@ -1,11 +1,14 @@
 use std::{sync::Arc, time::Duration};
 
+use futures_util::{SinkExt, StreamExt};
 use reqwest::{header::RETRY_AFTER, Client, StatusCode};
 use serde::Deserialize;
+use tokio::{runtime::Handle, sync::oneshot};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::{
     market_data::{
-        Candle, CandleHistoryRequest, CandleHistoryResponse, CandleStream, Instrument,
+        Candle, CandleEvent, CandleHistoryRequest, CandleHistoryResponse, CandleStream, Instrument,
         IntervalDefinition, IntervalUnit,
     },
     provider::{
@@ -16,6 +19,7 @@ use crate::{
 
 pub const BINANCE_PROVIDER_ID: &str = "binance";
 pub const BINANCE_MARKET_DATA_BASE_URL: &str = "https://data-api.binance.vision";
+pub const BINANCE_MARKET_DATA_WS_BASE_URL: &str = "wss://data-stream.binance.vision:443/ws";
 const BINANCE_KLINE_LIMIT: u32 = 1_000;
 const RESPONSE_MESSAGE_LIMIT: usize = 240;
 
@@ -38,6 +42,7 @@ type BinanceKline = (
 pub struct BinanceSpotProvider {
     client: Client,
     base_url: String,
+    websocket_base_url: String,
     now_millis: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -53,6 +58,7 @@ impl BinanceSpotProvider {
         Ok(Self {
             client,
             base_url: BINANCE_MARKET_DATA_BASE_URL.to_owned(),
+            websocket_base_url: BINANCE_MARKET_DATA_WS_BASE_URL.to_owned(),
             now_millis: Arc::new(current_utc_millis),
         })
     }
@@ -65,23 +71,40 @@ impl BinanceSpotProvider {
         Ok(provider)
     }
 
-    fn validate_request(&self, request: &CandleHistoryRequest) -> ProviderResult<()> {
-        request.validate()?;
-        if request.provider != BINANCE_PROVIDER_ID {
-            return Err(ProviderError::UnknownProvider(request.provider.clone()));
+    #[cfg(test)]
+    fn with_websocket_base_url(websocket_base_url: String) -> ProviderResult<Self> {
+        let mut provider = Self::new()?;
+        provider.websocket_base_url = websocket_base_url;
+        Ok(provider)
+    }
+
+    fn validate_stream(&self, stream: &CandleStream) -> ProviderResult<()> {
+        stream.validate()?;
+        if stream.provider != BINANCE_PROVIDER_ID {
+            return Err(ProviderError::UnknownProvider(stream.provider.clone()));
         }
         if !default_instruments()
             .iter()
-            .any(|instrument| instrument.symbol == request.symbol)
+            .any(|instrument| instrument.symbol == stream.symbol)
         {
-            return Err(ProviderError::UnknownSymbol(request.symbol.clone()));
+            return Err(ProviderError::UnknownSymbol(stream.symbol.clone()));
         }
         if !supported_intervals()
             .iter()
-            .any(|interval| interval.id == request.interval)
+            .any(|interval| interval.id == stream.interval)
         {
-            return Err(ProviderError::UnknownInterval(request.interval.clone()));
+            return Err(ProviderError::UnknownInterval(stream.interval.clone()));
         }
+        Ok(())
+    }
+
+    fn validate_request(&self, request: &CandleHistoryRequest) -> ProviderResult<()> {
+        request.validate()?;
+        self.validate_stream(&CandleStream {
+            provider: request.provider.clone(),
+            symbol: request.symbol.clone(),
+            interval: request.interval.clone(),
+        })?;
         if let Some(limit) = request.limit {
             if limit > BINANCE_KLINE_LIMIT {
                 return Err(ProviderError::RequestLimitExceeded {
@@ -177,13 +200,139 @@ impl MarketDataProvider for BinanceSpotProvider {
 
     fn subscribe_candles(
         &self,
-        _request: &CandleStream,
-        _on_event: CandleEventHandler,
+        request: &CandleStream,
+        on_event: CandleEventHandler,
     ) -> ProviderResult<Unsubscribe> {
-        Err(ProviderError::UnsupportedOperation(
-            "Binance WebSocket subscriptions",
-        ))
+        self.validate_stream(request)?;
+        let runtime = Handle::try_current().map_err(|_| ProviderError::RuntimeUnavailable)?;
+        let stream = request.clone();
+        let url = format!(
+            "{}/{}@kline_{}",
+            self.websocket_base_url.trim_end_matches('/'),
+            request.symbol.to_ascii_lowercase(),
+            request.interval
+        );
+        let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+
+        runtime.spawn(run_subscription(url, stream, on_event, shutdown_receiver));
+
+        Ok(Unsubscribe::new(shutdown_sender))
     }
+}
+
+async fn run_subscription(
+    url: String,
+    stream: CandleStream,
+    on_event: CandleEventHandler,
+    mut shutdown: oneshot::Receiver<()>,
+) {
+    let (mut socket, _) = match connect_async(&url).await {
+        Ok(connection) => connection,
+        Err(error) => {
+            eprintln!("Binance WebSocket connection failed: {error}");
+            return;
+        }
+    };
+
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                let _ = socket.close(None).await;
+                return;
+            }
+            message = socket.next() => match message {
+                Some(Ok(Message::Text(payload))) => match normalize_stream_event(payload.as_ref(), &stream) {
+                    Ok(event) => on_event(event),
+                    Err(error) => {
+                        eprintln!("invalid Binance WebSocket event: {error}");
+                        return;
+                    }
+                },
+                Some(Ok(Message::Ping(payload))) => {
+                    if let Err(error) = socket.send(Message::Pong(payload)).await {
+                        eprintln!("Binance WebSocket pong failed: {error}");
+                        return;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None => return,
+                Some(Ok(_)) => {}
+                Some(Err(error)) => {
+                    eprintln!("Binance WebSocket stream failed: {error}");
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct BinanceKlineEvent {
+    #[serde(rename = "e")]
+    event_type: String,
+    #[serde(rename = "s")]
+    symbol: String,
+    #[serde(rename = "k")]
+    kline: BinanceStreamKline,
+}
+
+#[derive(Deserialize)]
+struct BinanceStreamKline {
+    #[serde(rename = "t")]
+    timestamp: i64,
+    #[serde(rename = "s")]
+    symbol: String,
+    #[serde(rename = "i")]
+    interval: String,
+    #[serde(rename = "o")]
+    open: String,
+    #[serde(rename = "h")]
+    high: String,
+    #[serde(rename = "l")]
+    low: String,
+    #[serde(rename = "c")]
+    close: String,
+    #[serde(rename = "v")]
+    volume: String,
+    #[serde(rename = "x")]
+    closed: bool,
+}
+
+fn normalize_stream_event(payload: &str, stream: &CandleStream) -> ProviderResult<CandleEvent> {
+    let event = serde_json::from_str::<BinanceKlineEvent>(payload)
+        .map_err(|error| ProviderError::InvalidResponse(error.to_string()))?;
+    if event.event_type != "kline" {
+        return Err(ProviderError::InvalidResponse(format!(
+            "unexpected event type {}",
+            event.event_type
+        )));
+    }
+    if event.symbol != stream.symbol || event.kline.symbol != stream.symbol {
+        return Err(ProviderError::InvalidResponse(
+            "kline symbol does not match its subscription".to_owned(),
+        ));
+    }
+    if event.kline.interval != stream.interval {
+        return Err(ProviderError::InvalidResponse(
+            "kline interval does not match its subscription".to_owned(),
+        ));
+    }
+
+    let candle = Candle {
+        provider: BINANCE_PROVIDER_ID.to_owned(),
+        symbol: stream.symbol.clone(),
+        interval: stream.interval.clone(),
+        timestamp: event.kline.timestamp,
+        open: parse_decimal("open", event.kline.open)?,
+        high: parse_decimal("high", event.kline.high)?,
+        low: parse_decimal("low", event.kline.low)?,
+        close: parse_decimal("close", event.kline.close)?,
+        volume: parse_decimal("volume", event.kline.volume)?,
+        closed: event.kline.closed,
+    };
+    candle
+        .validate()
+        .map_err(|error| ProviderError::InvalidResponse(error.to_string()))?;
+    Ok(CandleEvent::Upsert { candle })
 }
 
 fn normalize_kline(
@@ -192,27 +341,28 @@ fn normalize_kline(
     now_millis: i64,
 ) -> ProviderResult<Candle> {
     let (timestamp, open, high, low, close, volume, close_time, _, _, _, _, _) = row;
-    let parse_number = |field: &'static str, value: String| {
-        value.parse::<f64>().map_err(|_| {
-            ProviderError::InvalidResponse(format!("{field} is not a finite decimal number"))
-        })
-    };
     let candle = Candle {
         provider: BINANCE_PROVIDER_ID.to_owned(),
         symbol: request.symbol.clone(),
         interval: request.interval.clone(),
         timestamp,
-        open: parse_number("open", open)?,
-        high: parse_number("high", high)?,
-        low: parse_number("low", low)?,
-        close: parse_number("close", close)?,
-        volume: parse_number("volume", volume)?,
+        open: parse_decimal("open", open)?,
+        high: parse_decimal("high", high)?,
+        low: parse_decimal("low", low)?,
+        close: parse_decimal("close", close)?,
+        volume: parse_decimal("volume", volume)?,
         closed: close_time < now_millis,
     };
     candle
         .validate()
         .map_err(|error| ProviderError::InvalidResponse(error.to_string()))?;
     Ok(candle)
+}
+
+fn parse_decimal(field: &'static str, value: String) -> ProviderResult<f64> {
+    value.parse::<f64>().map_err(|_| {
+        ProviderError::InvalidResponse(format!("{field} is not a finite decimal number"))
+    })
 }
 
 #[derive(Deserialize)]
@@ -304,10 +454,16 @@ fn supported_intervals() -> Vec<IntervalDefinition> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use futures_util::{SinkExt, StreamExt};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
+        sync::mpsc,
+        time::timeout,
     };
+    use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
 
     use super::*;
 
@@ -319,6 +475,14 @@ mod tests {
             start_timestamp: Some(1_704_067_200_000),
             end_timestamp: Some(1_704_067_320_000),
             limit: Some(3),
+        }
+    }
+
+    fn candle_stream() -> CandleStream {
+        CandleStream {
+            provider: BINANCE_PROVIDER_ID.to_owned(),
+            symbol: "BTCUSDT".to_owned(),
+            interval: "1m".to_owned(),
         }
     }
 
@@ -388,6 +552,133 @@ mod tests {
                 requested: 1_001,
                 maximum: 1_000,
             })
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::result_large_err)] // Signature is fixed by tungstenite's handshake callback.
+    async fn websocket_kline_is_normalized_and_cancellation_closes_the_stream() {
+        let payload = r#"{
+            "e":"kline",
+            "E":1704067259000,
+            "s":"BTCUSDT",
+            "k":{
+                "t":1704067200000,
+                "T":1704067259999,
+                "s":"BTCUSDT",
+                "i":"1m",
+                "f":100,
+                "L":200,
+                "o":"100.0",
+                "c":"101.5",
+                "h":"102.0",
+                "l":"99.0",
+                "v":"10.5",
+                "n":42,
+                "x":true,
+                "q":"0",
+                "V":"0",
+                "Q":"0",
+                "B":"0"
+            }
+        }"#;
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let websocket_base_url = format!("ws://{}/ws", listener.local_addr().expect("address"));
+        let server = tokio::spawn(async move {
+            let (connection, _) = listener.accept().await.expect("connection");
+            let mut socket = accept_hdr_async(
+                connection,
+                |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                    assert_eq!(request.uri().path(), "/ws/btcusdt@kline_1m");
+                    Ok(response)
+                },
+            )
+            .await
+            .expect("WebSocket handshake");
+
+            socket
+                .send(Message::Ping(vec![1, 2, 3]))
+                .await
+                .expect("send ping");
+            assert_eq!(
+                timeout(Duration::from_secs(1), socket.next())
+                    .await
+                    .expect("pong arrives")
+                    .expect("stream remains open")
+                    .expect("valid pong"),
+                Message::Pong(vec![1, 2, 3])
+            );
+            socket
+                .send(Message::Text(payload.into()))
+                .await
+                .expect("send kline");
+
+            assert!(matches!(
+                timeout(Duration::from_secs(1), socket.next())
+                    .await
+                    .expect("close arrives")
+                    .expect("close frame is present")
+                    .expect("valid close frame"),
+                Message::Close(_)
+            ));
+        });
+        let provider =
+            BinanceSpotProvider::with_websocket_base_url(websocket_base_url).expect("provider");
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let subscription = provider
+            .subscribe_candles(
+                &candle_stream(),
+                Arc::new(move |event| sender.send(event).expect("receiver remains open")),
+            )
+            .expect("subscription");
+
+        let CandleEvent::Upsert { candle } = timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .expect("kline arrives")
+            .expect("subscription remains open");
+        assert_eq!(
+            candle,
+            Candle {
+                provider: BINANCE_PROVIDER_ID.to_owned(),
+                symbol: "BTCUSDT".to_owned(),
+                interval: "1m".to_owned(),
+                timestamp: 1_704_067_200_000,
+                open: 100.0,
+                high: 102.0,
+                low: 99.0,
+                close: 101.5,
+                volume: 10.5,
+                closed: true,
+            }
+        );
+
+        drop(subscription);
+        server.await.expect("server task");
+    }
+
+    #[test]
+    fn websocket_event_must_match_its_subscription() {
+        let payload = r#"{
+            "e":"kline",
+            "s":"ETHUSDT",
+            "k":{
+                "t":1704067200000,
+                "s":"ETHUSDT",
+                "i":"1m",
+                "o":"100.0",
+                "c":"101.5",
+                "h":"102.0",
+                "l":"99.0",
+                "v":"10.5",
+                "x":false
+            }
+        }"#;
+
+        assert_eq!(
+            normalize_stream_event(payload, &candle_stream()),
+            Err(ProviderError::InvalidResponse(
+                "kline symbol does not match its subscription".to_owned()
+            ))
         );
     }
 

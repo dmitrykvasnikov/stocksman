@@ -77,3 +77,9 @@ Gap detection compares adjacent stored timestamps against the selected interval 
 Use Binance's unauthenticated market-data-only HTTPS host for Spot kline history. The adapter sends UTC millisecond bounds directly to `GET /api/v3/klines`, enforces the provider's 1,000-candle maximum, and converts the provider tuple response to canonical candles before returning it. A kline is closed only after its provider-supplied closing timestamp has passed.
 
 Historical provider calls are asynchronous so external HTTPS requests never block a Tokio backend worker. Transport failures, malformed provider payloads, unknown streams, request-limit violations, and rate limiting remain distinct provider errors that the local API can translate without exposing Binance response types to callers.
+
+## D016 — Binance live kline transport
+
+Use Binance's unauthenticated market-data-only WebSocket host and one raw `<symbol>@kline_<interval>` stream per provider subscription. Stream names use Binance's required lowercase symbol while incoming events must match the requested canonical symbol and interval before their OHLCV strings and provider-supplied closed flag are converted into a provider-neutral candle upsert.
+
+Subscriptions respond to WebSocket ping frames and close the connection when their cancellation handle is invoked or dropped. A connection or protocol failure ends the subscription; reconnect and overlap resynchronization are a separate Phase 2 task so their behavior can be implemented and tested together.

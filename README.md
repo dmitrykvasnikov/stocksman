@@ -30,6 +30,8 @@ Optional `start_timestamp` and `end_timestamp` values are forwarded as inclusive
 
 The transport behavior follows Binance's official [Spot REST API documentation](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#klinecandlestick-data) and [market-data-only endpoint guidance](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/market_data_only.md). Automated tests use a temporary local HTTP server rather than the live service.
 
+Live provider subscriptions use Binance's public market-data-only WebSocket host and raw `<symbol>@kline_<interval>` streams. Incoming open-candle updates and final closed-candle updates are validated against the subscription, normalized to provider-neutral candle upserts, and stop promptly when the subscription is cancelled. Reconnect and overlap recovery are tracked as the next Phase 2 task.
+
 ## Required tools
 
 Install these on a clean development machine before building the application:
