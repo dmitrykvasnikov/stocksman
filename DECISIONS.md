@@ -83,3 +83,9 @@ Historical provider calls are asynchronous so external HTTPS requests never bloc
 Use Binance's unauthenticated market-data-only WebSocket host and one raw `<symbol>@kline_<interval>` stream per provider subscription. Stream names use Binance's required lowercase symbol while incoming events must match the requested canonical symbol and interval before their OHLCV strings and provider-supplied closed flag are converted into a provider-neutral candle upsert.
 
 Subscriptions respond to WebSocket ping frames and close the connection when their cancellation handle is invoked or dropped. A connection or protocol failure ends the subscription; reconnect and overlap resynchronization are a separate Phase 2 task so their behavior can be implemented and tested together.
+
+## D017 — Binance candle normalization boundary
+
+REST history rows and WebSocket kline events pass through one private Binance normalization function before becoming canonical candles. The shared boundary assigns canonical stream identity, parses OHLCV decimal strings, validates opening and closing timestamps and price ranges, and preserves the transport-specific closed state.
+
+All Binance payload structures remain private to the adapter. Downstream provider interfaces, storage, and rendering receive only provider-neutral candle history or candle-upsert events.

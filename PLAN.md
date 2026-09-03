@@ -33,7 +33,7 @@ Acceptance criteria:
 
 - [x] Implement public REST historical backfill.
 - [x] Implement WebSocket kline subscriptions.
-- [ ] Normalize all provider events into canonical candles.
+- [x] Normalize all provider events into canonical candles.
 - [ ] Add reconnect, overlap resynchronization, rate-limit, missing-candle, and revision handling.
 - [ ] Load the five configured default pairs and every interval supported by the adapter.
 

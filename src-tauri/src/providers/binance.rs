@@ -23,7 +23,7 @@ pub const BINANCE_MARKET_DATA_WS_BASE_URL: &str = "wss://data-stream.binance.vis
 const BINANCE_KLINE_LIMIT: u32 = 1_000;
 const RESPONSE_MESSAGE_LIMIT: usize = 240;
 
-type BinanceKline = (
+type BinanceRestKline = (
     i64,
     String,
     String,
@@ -37,6 +37,16 @@ type BinanceKline = (
     String,
     String,
 );
+
+struct BinanceKlineValues {
+    timestamp: i64,
+    close_time: i64,
+    open: String,
+    high: String,
+    low: String,
+    close: String,
+    volume: String,
+}
 
 #[derive(Clone)]
 pub struct BinanceSpotProvider {
@@ -164,7 +174,7 @@ impl BinanceSpotProvider {
         }
 
         let rows = response
-            .json::<Vec<BinanceKline>>()
+            .json::<Vec<BinanceRestKline>>()
             .await
             .map_err(|error| ProviderError::InvalidResponse(error.to_string()))?;
         let now_millis = (self.now_millis)();
@@ -269,6 +279,8 @@ async fn run_subscription(
 struct BinanceKlineEvent {
     #[serde(rename = "e")]
     event_type: String,
+    #[serde(rename = "E")]
+    event_timestamp: i64,
     #[serde(rename = "s")]
     symbol: String,
     #[serde(rename = "k")]
@@ -279,6 +291,8 @@ struct BinanceKlineEvent {
 struct BinanceStreamKline {
     #[serde(rename = "t")]
     timestamp: i64,
+    #[serde(rename = "T")]
+    close_time: i64,
     #[serde(rename = "s")]
     symbol: String,
     #[serde(rename = "i")]
@@ -317,46 +331,86 @@ fn normalize_stream_event(payload: &str, stream: &CandleStream) -> ProviderResul
         ));
     }
 
-    let candle = Candle {
-        provider: BINANCE_PROVIDER_ID.to_owned(),
-        symbol: stream.symbol.clone(),
-        interval: stream.interval.clone(),
-        timestamp: event.kline.timestamp,
-        open: parse_decimal("open", event.kline.open)?,
-        high: parse_decimal("high", event.kline.high)?,
-        low: parse_decimal("low", event.kline.low)?,
-        close: parse_decimal("close", event.kline.close)?,
-        volume: parse_decimal("volume", event.kline.volume)?,
-        closed: event.kline.closed,
-    };
-    candle
-        .validate()
-        .map_err(|error| ProviderError::InvalidResponse(error.to_string()))?;
+    validate_provider_timestamp("event timestamp", event.event_timestamp)?;
+    let candle = normalize_candle(
+        BinanceKlineValues {
+            timestamp: event.kline.timestamp,
+            close_time: event.kline.close_time,
+            open: event.kline.open,
+            high: event.kline.high,
+            low: event.kline.low,
+            close: event.kline.close,
+            volume: event.kline.volume,
+        },
+        stream,
+        event.kline.closed,
+    )?;
     Ok(CandleEvent::Upsert { candle })
 }
 
 fn normalize_kline(
-    row: BinanceKline,
+    row: BinanceRestKline,
     request: &CandleHistoryRequest,
     now_millis: i64,
 ) -> ProviderResult<Candle> {
     let (timestamp, open, high, low, close, volume, close_time, _, _, _, _, _) = row;
+    normalize_candle(
+        BinanceKlineValues {
+            timestamp,
+            close_time,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        },
+        &CandleStream {
+            provider: request.provider.clone(),
+            symbol: request.symbol.clone(),
+            interval: request.interval.clone(),
+        },
+        close_time < now_millis,
+    )
+}
+
+fn normalize_candle(
+    values: BinanceKlineValues,
+    stream: &CandleStream,
+    closed: bool,
+) -> ProviderResult<Candle> {
+    validate_provider_timestamp("opening timestamp", values.timestamp)?;
+    validate_provider_timestamp("closing timestamp", values.close_time)?;
+    if values.close_time < values.timestamp {
+        return Err(ProviderError::InvalidResponse(
+            "closing timestamp precedes opening timestamp".to_owned(),
+        ));
+    }
+
     let candle = Candle {
         provider: BINANCE_PROVIDER_ID.to_owned(),
-        symbol: request.symbol.clone(),
-        interval: request.interval.clone(),
-        timestamp,
-        open: parse_decimal("open", open)?,
-        high: parse_decimal("high", high)?,
-        low: parse_decimal("low", low)?,
-        close: parse_decimal("close", close)?,
-        volume: parse_decimal("volume", volume)?,
-        closed: close_time < now_millis,
+        symbol: stream.symbol.clone(),
+        interval: stream.interval.clone(),
+        timestamp: values.timestamp,
+        open: parse_decimal("open", values.open)?,
+        high: parse_decimal("high", values.high)?,
+        low: parse_decimal("low", values.low)?,
+        close: parse_decimal("close", values.close)?,
+        volume: parse_decimal("volume", values.volume)?,
+        closed,
     };
     candle
         .validate()
         .map_err(|error| ProviderError::InvalidResponse(error.to_string()))?;
     Ok(candle)
+}
+
+fn validate_provider_timestamp(field: &'static str, value: i64) -> ProviderResult<()> {
+    if value < 0 {
+        return Err(ProviderError::InvalidResponse(format!(
+            "{field} must be a non-negative UTC millisecond timestamp"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_decimal(field: &'static str, value: String) -> ProviderResult<f64> {
@@ -660,9 +714,11 @@ mod tests {
     fn websocket_event_must_match_its_subscription() {
         let payload = r#"{
             "e":"kline",
+            "E":1704067259000,
             "s":"ETHUSDT",
             "k":{
                 "t":1704067200000,
+                "T":1704067259999,
                 "s":"ETHUSDT",
                 "i":"1m",
                 "o":"100.0",
@@ -678,6 +734,76 @@ mod tests {
             normalize_stream_event(payload, &candle_stream()),
             Err(ProviderError::InvalidResponse(
                 "kline symbol does not match its subscription".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn rest_and_websocket_klines_share_the_same_canonical_shape() {
+        let request = history_request();
+        let history_candle = normalize_kline(
+            (
+                1_704_067_200_000,
+                "100.0".to_owned(),
+                "102.0".to_owned(),
+                "99.0".to_owned(),
+                "101.5".to_owned(),
+                "10.5".to_owned(),
+                1_704_067_259_999,
+                "0".to_owned(),
+                42,
+                "0".to_owned(),
+                "0".to_owned(),
+                "0".to_owned(),
+            ),
+            &request,
+            1_704_067_260_000,
+        )
+        .expect("history candle");
+        let payload = r#"{
+            "e":"kline",
+            "E":1704067259000,
+            "s":"BTCUSDT",
+            "k":{
+                "t":1704067200000,
+                "T":1704067259999,
+                "s":"BTCUSDT",
+                "i":"1m",
+                "o":"100.0",
+                "h":"102.0",
+                "l":"99.0",
+                "c":"101.5",
+                "v":"10.5",
+                "x":true
+            }
+        }"#;
+        let CandleEvent::Upsert {
+            candle: stream_candle,
+        } = normalize_stream_event(payload, &candle_stream()).expect("stream candle");
+
+        assert_eq!(history_candle, stream_candle);
+    }
+
+    #[test]
+    fn shared_normalizer_rejects_invalid_provider_timestamps() {
+        let error = normalize_candle(
+            BinanceKlineValues {
+                timestamp: 1_704_067_200_000,
+                close_time: 1_704_067_199_999,
+                open: "100.0".to_owned(),
+                high: "102.0".to_owned(),
+                low: "99.0".to_owned(),
+                close: "101.5".to_owned(),
+                volume: "10.5".to_owned(),
+            },
+            &candle_stream(),
+            true,
+        );
+
+        assert_eq!(
+            error,
+            Err(ProviderError::InvalidResponse(
+                "closing timestamp precedes opening timestamp".to_owned()
             ))
         );
     }
