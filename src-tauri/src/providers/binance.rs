@@ -1,9 +1,9 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{header::RETRY_AFTER, Client, StatusCode};
 use serde::Deserialize;
-use tokio::{runtime::Handle, sync::oneshot};
+use tokio::{runtime::Handle, sync::oneshot, time::sleep};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::{
@@ -22,6 +22,9 @@ pub const BINANCE_MARKET_DATA_BASE_URL: &str = "https://data-api.binance.vision"
 pub const BINANCE_MARKET_DATA_WS_BASE_URL: &str = "wss://data-stream.binance.vision:443/ws";
 const BINANCE_KLINE_LIMIT: u32 = 1_000;
 const RESPONSE_MESSAGE_LIMIT: usize = 240;
+const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(500);
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
+const RECENT_CANDLE_LIMIT: usize = 2_048;
 
 type BinanceRestKline = (
     i64,
@@ -54,6 +57,8 @@ pub struct BinanceSpotProvider {
     base_url: String,
     websocket_base_url: String,
     now_millis: Arc<dyn Fn() -> i64 + Send + Sync>,
+    reconnect_initial_delay: Duration,
+    reconnect_max_delay: Duration,
 }
 
 impl BinanceSpotProvider {
@@ -70,6 +75,8 @@ impl BinanceSpotProvider {
             base_url: BINANCE_MARKET_DATA_BASE_URL.to_owned(),
             websocket_base_url: BINANCE_MARKET_DATA_WS_BASE_URL.to_owned(),
             now_millis: Arc::new(current_utc_millis),
+            reconnect_initial_delay: RECONNECT_INITIAL_DELAY,
+            reconnect_max_delay: RECONNECT_MAX_DELAY,
         })
     }
 
@@ -85,6 +92,16 @@ impl BinanceSpotProvider {
     fn with_websocket_base_url(websocket_base_url: String) -> ProviderResult<Self> {
         let mut provider = Self::new()?;
         provider.websocket_base_url = websocket_base_url;
+        Ok(provider)
+    }
+
+    #[cfg(test)]
+    fn with_test_endpoints(base_url: String, websocket_base_url: String) -> ProviderResult<Self> {
+        let mut provider = Self::new()?;
+        provider.base_url = base_url;
+        provider.websocket_base_url = websocket_base_url;
+        provider.reconnect_initial_delay = Duration::from_millis(10);
+        provider.reconnect_max_delay = Duration::from_millis(20);
         Ok(provider)
     }
 
@@ -224,54 +241,314 @@ impl MarketDataProvider for BinanceSpotProvider {
         );
         let (shutdown_sender, shutdown_receiver) = oneshot::channel();
 
-        runtime.spawn(run_subscription(url, stream, on_event, shutdown_receiver));
+        runtime.spawn(
+            self.clone()
+                .run_subscription(url, stream, on_event, shutdown_receiver),
+        );
 
         Ok(Unsubscribe::new(shutdown_sender))
     }
 }
 
-async fn run_subscription(
-    url: String,
-    stream: CandleStream,
-    on_event: CandleEventHandler,
-    mut shutdown: oneshot::Receiver<()>,
-) {
-    let (mut socket, _) = match connect_async(&url).await {
-        Ok(connection) => connection,
-        Err(error) => {
-            eprintln!("Binance WebSocket connection failed: {error}");
-            return;
-        }
-    };
+impl BinanceSpotProvider {
+    async fn run_subscription(
+        self,
+        url: String,
+        stream: CandleStream,
+        on_event: CandleEventHandler,
+        mut shutdown: oneshot::Receiver<()>,
+    ) {
+        let mut cursor = SubscriptionCursor::default();
+        let mut retry_attempt = 0_u32;
 
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => {
-                let _ = socket.close(None).await;
-                return;
-            }
-            message = socket.next() => match message {
-                Some(Ok(Message::Text(payload))) => match normalize_stream_event(payload.as_ref(), &stream) {
-                    Ok(event) => on_event(event),
-                    Err(error) => {
-                        eprintln!("invalid Binance WebSocket event: {error}");
+        loop {
+            let connection = tokio::select! {
+                _ = &mut shutdown => return,
+                connection = connect_async(&url) => connection,
+            };
+            let (mut socket, _) = match connection {
+                Ok(connection) => connection,
+                Err(error) => {
+                    eprintln!("Binance WebSocket connection failed: {error}");
+                    if wait_for_retry(
+                        &mut shutdown,
+                        reconnect_delay(
+                            self.reconnect_initial_delay,
+                            self.reconnect_max_delay,
+                            retry_attempt,
+                        ),
+                    )
+                    .await
+                    {
                         return;
                     }
-                },
-                Some(Ok(Message::Ping(payload))) => {
-                    if let Err(error) = socket.send(Message::Pong(payload)).await {
-                        eprintln!("Binance WebSocket pong failed: {error}");
+                    retry_attempt = retry_attempt.saturating_add(1);
+                    continue;
+                }
+            };
+
+            if let Some(overlap_start) = cursor.latest_timestamp() {
+                match self
+                    .recover_candles(
+                        &stream,
+                        overlap_start,
+                        None,
+                        &on_event,
+                        &mut cursor,
+                        &mut shutdown,
+                    )
+                    .await
+                {
+                    RecoveryOutcome::Complete => {}
+                    RecoveryOutcome::Cancelled => {
+                        let _ = socket.close(None).await;
                         return;
+                    }
+                    RecoveryOutcome::Failed(error) => {
+                        eprintln!("Binance overlap resynchronization failed: {error}");
+                        let _ = socket.close(None).await;
+                        if wait_for_retry(
+                            &mut shutdown,
+                            reconnect_delay(
+                                self.reconnect_initial_delay,
+                                self.reconnect_max_delay,
+                                retry_attempt,
+                            ),
+                        )
+                        .await
+                        {
+                            return;
+                        }
+                        retry_attempt = retry_attempt.saturating_add(1);
+                        continue;
                     }
                 }
-                Some(Ok(Message::Close(_))) | None => return,
-                Some(Ok(_)) => {}
-                Some(Err(error)) => {
-                    eprintln!("Binance WebSocket stream failed: {error}");
+            }
+
+            let reconnect = loop {
+                tokio::select! {
+                    _ = &mut shutdown => {
+                        let _ = socket.close(None).await;
+                        return;
+                    }
+                    message = socket.next() => match message {
+                        Some(Ok(Message::Text(payload))) => {
+                            let event = match normalize_stream_event(payload.as_ref(), &stream) {
+                                Ok(event) => event,
+                                Err(error) => {
+                                    eprintln!("invalid Binance WebSocket event: {error}");
+                                    break true;
+                                }
+                            };
+                            let CandleEvent::Upsert { candle } = event;
+                            if let Some(gap_start) = cursor.gap_start(candle.timestamp, &stream.interval) {
+                                match self
+                                    .recover_candles(
+                                        &stream,
+                                        gap_start,
+                                        Some(candle.timestamp),
+                                        &on_event,
+                                        &mut cursor,
+                                        &mut shutdown,
+                                    )
+                                    .await
+                                {
+                                    RecoveryOutcome::Complete => {}
+                                    RecoveryOutcome::Cancelled => {
+                                        let _ = socket.close(None).await;
+                                        return;
+                                    }
+                                    RecoveryOutcome::Failed(error) => {
+                                        eprintln!("Binance missing-candle recovery failed: {error}");
+                                        break true;
+                                    }
+                                }
+                            }
+                            cursor.emit(candle, &on_event);
+                            retry_attempt = 0;
+                        }
+                        Some(Ok(Message::Ping(payload))) => {
+                            if let Err(error) = socket.send(Message::Pong(payload)).await {
+                                eprintln!("Binance WebSocket pong failed: {error}");
+                                break true;
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None => break true,
+                        Some(Ok(_)) => {}
+                        Some(Err(error)) => {
+                            eprintln!("Binance WebSocket stream failed: {error}");
+                            break true;
+                        }
+                    }
+                }
+            };
+
+            if reconnect {
+                if wait_for_retry(
+                    &mut shutdown,
+                    reconnect_delay(
+                        self.reconnect_initial_delay,
+                        self.reconnect_max_delay,
+                        retry_attempt,
+                    ),
+                )
+                .await
+                {
                     return;
                 }
+                retry_attempt = retry_attempt.saturating_add(1);
             }
         }
+    }
+
+    async fn recover_candles(
+        &self,
+        stream: &CandleStream,
+        start_timestamp: i64,
+        end_timestamp: Option<i64>,
+        on_event: &CandleEventHandler,
+        cursor: &mut SubscriptionCursor,
+        shutdown: &mut oneshot::Receiver<()>,
+    ) -> RecoveryOutcome {
+        let mut page_start = start_timestamp;
+        let mut rate_limit_attempt = 0_u32;
+
+        loop {
+            let request = CandleHistoryRequest {
+                provider: stream.provider.clone(),
+                symbol: stream.symbol.clone(),
+                interval: stream.interval.clone(),
+                start_timestamp: Some(page_start),
+                end_timestamp,
+                limit: Some(BINANCE_KLINE_LIMIT),
+            };
+            let response = tokio::select! {
+                _ = &mut *shutdown => return RecoveryOutcome::Cancelled,
+                response = self.fetch_candles(&request) => response,
+            };
+            let history = match response {
+                Ok(history) => history,
+                Err(ProviderError::RateLimited {
+                    retry_after_seconds,
+                }) => {
+                    let delay = retry_after_seconds
+                        .map(Duration::from_secs)
+                        .unwrap_or_else(|| {
+                            reconnect_delay(
+                                self.reconnect_initial_delay,
+                                self.reconnect_max_delay,
+                                rate_limit_attempt,
+                            )
+                        });
+                    eprintln!("Binance recovery rate limited; retrying after {delay:?}");
+                    if wait_for_retry(shutdown, delay).await {
+                        return RecoveryOutcome::Cancelled;
+                    }
+                    rate_limit_attempt = rate_limit_attempt.saturating_add(1);
+                    continue;
+                }
+                Err(error) => return RecoveryOutcome::Failed(error),
+            };
+            rate_limit_attempt = 0;
+
+            let candle_count = history.candles.len();
+            let Some(last_timestamp) = history.candles.last().map(|candle| candle.timestamp) else {
+                return RecoveryOutcome::Complete;
+            };
+            for candle in history.candles {
+                cursor.emit(candle, on_event);
+            }
+
+            if candle_count < BINANCE_KLINE_LIMIT as usize
+                || end_timestamp.is_some_and(|end| last_timestamp >= end)
+            {
+                return RecoveryOutcome::Complete;
+            }
+            let Some(next_page) = last_timestamp.checked_add(1) else {
+                return RecoveryOutcome::Failed(ProviderError::InvalidResponse(
+                    "recovery timestamp overflowed".to_owned(),
+                ));
+            };
+            if next_page <= page_start {
+                return RecoveryOutcome::Failed(ProviderError::InvalidResponse(
+                    "recovery history did not advance".to_owned(),
+                ));
+            }
+            page_start = next_page;
+        }
+    }
+}
+
+#[derive(Debug)]
+enum RecoveryOutcome {
+    Complete,
+    Cancelled,
+    Failed(ProviderError),
+}
+
+#[derive(Default)]
+struct SubscriptionCursor {
+    recent: BTreeMap<i64, Candle>,
+}
+
+impl SubscriptionCursor {
+    fn latest_timestamp(&self) -> Option<i64> {
+        self.recent
+            .last_key_value()
+            .map(|(timestamp, _)| *timestamp)
+    }
+
+    fn gap_start(&self, timestamp: i64, interval: &str) -> Option<i64> {
+        let latest = self.latest_timestamp()?;
+        let expected = advance_binance_interval(latest, interval)?;
+        (timestamp > expected).then_some(latest)
+    }
+
+    fn emit(&mut self, candle: Candle, on_event: &CandleEventHandler) {
+        if self.recent.get(&candle.timestamp) == Some(&candle) {
+            return;
+        }
+        self.recent.insert(candle.timestamp, candle.clone());
+        while self.recent.len() > RECENT_CANDLE_LIMIT {
+            self.recent.pop_first();
+        }
+        on_event(CandleEvent::Upsert { candle });
+    }
+}
+
+fn advance_binance_interval(timestamp: i64, interval: &str) -> Option<i64> {
+    let definition = supported_intervals()
+        .into_iter()
+        .find(|definition| definition.id == interval)?;
+    if definition.unit == IntervalUnit::Month {
+        use chrono::{DateTime, Months, Utc};
+
+        return DateTime::<Utc>::from_timestamp_millis(timestamp)?
+            .checked_add_months(Months::new(definition.amount))
+            .map(|date_time| date_time.timestamp_millis());
+    }
+    let unit_millis = match definition.unit {
+        IntervalUnit::Second => 1_000_i64,
+        IntervalUnit::Minute => 60_000,
+        IntervalUnit::Hour => 3_600_000,
+        IntervalUnit::Day => 86_400_000,
+        IntervalUnit::Week => 604_800_000,
+        IntervalUnit::Month => unreachable!(),
+    };
+    timestamp.checked_add(unit_millis.checked_mul(i64::from(definition.amount))?)
+}
+
+fn reconnect_delay(initial: Duration, maximum: Duration, attempt: u32) -> Duration {
+    initial
+        .checked_mul(2_u32.saturating_pow(attempt.min(16)))
+        .unwrap_or(maximum)
+        .min(maximum)
+}
+
+async fn wait_for_retry(shutdown: &mut oneshot::Receiver<()>, delay: Duration) -> bool {
+    tokio::select! {
+        _ = &mut *shutdown => true,
+        _ = sleep(delay) => false,
     }
 }
 
@@ -510,6 +787,7 @@ fn supported_intervals() -> Vec<IntervalDefinition> {
 mod tests {
     use std::sync::Arc;
 
+    use crate::candle_store::CandleStore;
     use futures_util::{SinkExt, StreamExt};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -538,6 +816,28 @@ mod tests {
             symbol: "BTCUSDT".to_owned(),
             interval: "1m".to_owned(),
         }
+    }
+
+    fn websocket_payload(timestamp: i64, close_time: i64, close: &str) -> String {
+        format!(
+            r#"{{
+                "e":"kline",
+                "E":{close_time},
+                "s":"BTCUSDT",
+                "k":{{
+                    "t":{timestamp},
+                    "T":{close_time},
+                    "s":"BTCUSDT",
+                    "i":"1m",
+                    "o":"100.0",
+                    "c":"{close}",
+                    "h":"104.0",
+                    "l":"99.0",
+                    "v":"10.5",
+                    "x":true
+                }}
+            }}"#
+        )
     }
 
     #[tokio::test]
@@ -708,6 +1008,164 @@ mod tests {
 
         drop(subscription);
         server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::result_large_err)] // Signature is fixed by tungstenite's handshake callback.
+    async fn reconnect_recovers_overlap_gaps_rate_limits_and_revisions() {
+        let first_timestamp = 1_704_067_200_000;
+        let second_timestamp = first_timestamp + 60_000;
+        let third_timestamp = second_timestamp + 60_000;
+
+        let rest_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("REST listener");
+        let base_url = format!(
+            "http://{}",
+            rest_listener.local_addr().expect("REST address")
+        );
+        let rest_server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for response_number in 0..2 {
+                let (mut stream, _) = rest_listener.accept().await.expect("REST connection");
+                let mut request = vec![0; 4_096];
+                let length = stream.read(&mut request).await.expect("REST request");
+                requests.push(
+                    String::from_utf8(request[..length].to_vec()).expect("UTF-8 REST request"),
+                );
+
+                let response = if response_number == 0 {
+                    "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+                } else {
+                    let body = format!(
+                        r#"[
+                            [{first_timestamp},"100.0","104.0","99.0","101.5","10.5",{},"0",5,"0","0","0"],
+                            [{second_timestamp},"101.5","104.0","100.0","102.0","8.0",{},"0",4,"0","0","0"]
+                        ]"#,
+                        first_timestamp + 59_999,
+                        second_timestamp + 59_999,
+                    );
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("REST response");
+            }
+            requests
+        });
+
+        let websocket_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("WebSocket listener");
+        let websocket_base_url = format!(
+            "ws://{}/ws",
+            websocket_listener.local_addr().expect("WebSocket address")
+        );
+        let websocket_server = tokio::spawn(async move {
+            let (first_connection, _) = websocket_listener
+                .accept()
+                .await
+                .expect("first WebSocket connection");
+            let mut first_socket = accept_hdr_async(
+                first_connection,
+                |_: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                    Ok(response)
+                },
+            )
+            .await
+            .expect("first WebSocket handshake");
+            first_socket
+                .send(Message::Text(websocket_payload(
+                    first_timestamp,
+                    first_timestamp + 59_999,
+                    "101.0",
+                )))
+                .await
+                .expect("first candle");
+            first_socket.close(None).await.expect("first close");
+
+            let (second_connection, _) = websocket_listener
+                .accept()
+                .await
+                .expect("second WebSocket connection");
+            let mut second_socket = accept_hdr_async(
+                second_connection,
+                |_: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                    Ok(response)
+                },
+            )
+            .await
+            .expect("second WebSocket handshake");
+            second_socket
+                .send(Message::Text(websocket_payload(
+                    third_timestamp,
+                    third_timestamp + 59_999,
+                    "103.0",
+                )))
+                .await
+                .expect("post-reconnect candle");
+
+            assert!(matches!(
+                timeout(Duration::from_secs(2), second_socket.next())
+                    .await
+                    .expect("subscription closes")
+                    .expect("close frame is present")
+                    .expect("valid close frame"),
+                Message::Close(_)
+            ));
+        });
+
+        let provider = BinanceSpotProvider::with_test_endpoints(base_url, websocket_base_url)
+            .expect("provider");
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let subscription = provider
+            .subscribe_candles(
+                &candle_stream(),
+                Arc::new(move |event| sender.send(event).expect("receiver remains open")),
+            )
+            .expect("subscription");
+
+        let mut events = Vec::new();
+        for _ in 0..4 {
+            events.push(
+                timeout(Duration::from_secs(2), receiver.recv())
+                    .await
+                    .expect("recovered event arrives")
+                    .expect("subscription remains open"),
+            );
+        }
+        drop(subscription);
+
+        let requests = rest_server.await.expect("REST server task");
+        websocket_server.await.expect("WebSocket server task");
+        assert_eq!(requests.len(), 2);
+        assert!(requests
+            .iter()
+            .all(|request| request.contains("startTime=1704067200000")));
+
+        let closes = events
+            .iter()
+            .map(|event| match event {
+                CandleEvent::Upsert { candle } => candle.close,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(closes, vec![101.0, 101.5, 102.0, 103.0]);
+
+        let mut store = CandleStore::new();
+        for event in events {
+            store.apply(event).expect("valid recovered candle");
+        }
+        let candles = store
+            .candles(&candle_stream())
+            .expect("recovered candle snapshot");
+        assert_eq!(candles.len(), 3);
+        assert_eq!(candles[0].close, 101.5);
+        assert_eq!(candles[1].timestamp, second_timestamp);
+        assert_eq!(candles[2].timestamp, third_timestamp);
     }
 
     #[test]

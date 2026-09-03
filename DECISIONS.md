@@ -89,3 +89,9 @@ Subscriptions respond to WebSocket ping frames and close the connection when the
 REST history rows and WebSocket kline events pass through one private Binance normalization function before becoming canonical candles. The shared boundary assigns canonical stream identity, parses OHLCV decimal strings, validates opening and closing timestamps and price ranges, and preserves the transport-specific closed state.
 
 All Binance payload structures remain private to the adapter. Downstream provider interfaces, storage, and rendering receive only provider-neutral candle history or candle-upsert events.
+
+## D018 — Binance live-stream recovery
+
+Binance subscriptions reconnect with bounded exponential backoff until explicitly cancelled. After reconnecting, the adapter requests REST history beginning at the latest observed opening timestamp, deliberately overlapping that candle so a provider revision is not lost. Recovery is paginated beyond Binance's 1,000-row response limit, and a jump in live opening timestamps triggers the same bounded recovery through the incoming timestamp before that event is delivered.
+
+REST recovery honors Binance's `Retry-After` response when rate limited and otherwise uses the reconnect backoff. Exact repeats from the overlap are suppressed inside the adapter, while changed candles at the same timestamp remain provider-neutral upsert events so the candle store can apply its last-write-wins revision semantics. Cancellation interrupts reconnect and rate-limit waits.

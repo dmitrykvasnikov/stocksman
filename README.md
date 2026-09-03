@@ -30,7 +30,9 @@ Optional `start_timestamp` and `end_timestamp` values are forwarded as inclusive
 
 The transport behavior follows Binance's official [Spot REST API documentation](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#klinecandlestick-data) and [market-data-only endpoint guidance](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/market_data_only.md). Automated tests use a temporary local HTTP server rather than the live service.
 
-Live provider subscriptions use Binance's public market-data-only WebSocket host and raw `<symbol>@kline_<interval>` streams. Incoming open-candle updates and final closed-candle updates are validated against the subscription, normalized to provider-neutral candle upserts, and stop promptly when the subscription is cancelled. REST rows and WebSocket events share the same private normalization path for UTC timestamps, OHLCV values, stream identity, and candle validation, so no Binance payload type crosses the adapter boundary. Reconnect and overlap recovery are tracked as the next Phase 2 task.
+Live provider subscriptions use Binance's public market-data-only WebSocket host and raw `<symbol>@kline_<interval>` streams. Incoming open-candle updates and final closed-candle updates are validated against the subscription, normalized to provider-neutral candle upserts, and stop promptly when the subscription is cancelled. REST rows and WebSocket events share the same private normalization path for UTC timestamps, OHLCV values, stream identity, and candle validation, so no Binance payload type crosses the adapter boundary.
+
+Subscriptions reconnect with bounded exponential backoff. Every reconnect performs an inclusive REST overlap from the newest observed candle, and a jump in live timestamps triggers recovery through the incoming candle. Recovery is paginated, honors `Retry-After` when Binance rate limits it, suppresses exact overlap duplicates, and still emits same-timestamp changes as revisions. Dropping the subscription interrupts both reconnect and rate-limit waits.
 
 ## Required tools
 
