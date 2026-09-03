@@ -8,7 +8,8 @@ use crate::{
         IntervalDefinition, IntervalUnit,
     },
     provider::{
-        CandleEventHandler, MarketDataProvider, ProviderError, ProviderResult, Unsubscribe,
+        CandleEventHandler, MarketDataProvider, ProviderError, ProviderFuture, ProviderResult,
+        Unsubscribe,
     },
 };
 
@@ -98,39 +99,44 @@ impl MarketDataProvider for MockReplayProvider {
         Ok(self.intervals.to_vec())
     }
 
-    fn get_candles(&self, request: &CandleHistoryRequest) -> ProviderResult<CandleHistoryResponse> {
-        request.validate()?;
-        self.validate_stream(&CandleStream {
-            provider: request.provider.clone(),
-            symbol: request.symbol.clone(),
-            interval: request.interval.clone(),
-        })?;
+    fn get_candles<'a>(
+        &'a self,
+        request: &'a CandleHistoryRequest,
+    ) -> ProviderFuture<'a, CandleHistoryResponse> {
+        Box::pin(async move {
+            request.validate()?;
+            self.validate_stream(&CandleStream {
+                provider: request.provider.clone(),
+                symbol: request.symbol.clone(),
+                interval: request.interval.clone(),
+            })?;
 
-        let mut candles = self
-            .replay
-            .iter()
-            .filter(|candle| {
-                candle.symbol == request.symbol
-                    && candle.interval == request.interval
-                    && request
-                        .start_timestamp
-                        .map_or(true, |start| candle.timestamp >= start)
-                    && request
-                        .end_timestamp
-                        .map_or(true, |end| candle.timestamp <= end)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        candles.sort_by_key(|candle| candle.timestamp);
+            let mut candles = self
+                .replay
+                .iter()
+                .filter(|candle| {
+                    candle.symbol == request.symbol
+                        && candle.interval == request.interval
+                        && request
+                            .start_timestamp
+                            .map_or(true, |start| candle.timestamp >= start)
+                        && request
+                            .end_timestamp
+                            .map_or(true, |end| candle.timestamp <= end)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            candles.sort_by_key(|candle| candle.timestamp);
 
-        if let Some(limit) = request.limit {
-            let keep = limit as usize;
-            if candles.len() > keep {
-                candles.drain(..candles.len() - keep);
+            if let Some(limit) = request.limit {
+                let keep = limit as usize;
+                if candles.len() > keep {
+                    candles.drain(..candles.len() - keep);
+                }
             }
-        }
 
-        Ok(CandleHistoryResponse { candles })
+            Ok(CandleHistoryResponse { candles })
+        })
     }
 
     fn subscribe_candles(
@@ -371,8 +377,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sample_metadata_and_history_are_repeatable() {
+    #[tokio::test]
+    async fn sample_metadata_and_history_are_repeatable() {
         let first = MockReplayProvider::sample(Duration::ZERO);
         let second = MockReplayProvider::sample(Duration::ZERO);
         let mut latest = request("BTCUSDT", "1m");
@@ -382,12 +388,13 @@ mod tests {
         assert_eq!(first.list_symbols().expect("symbols").len(), 5);
         assert_eq!(first.list_intervals().expect("intervals").len(), 4);
         assert_eq!(
-            first.get_candles(&latest).expect("first history"),
-            second.get_candles(&latest).expect("second history")
+            first.get_candles(&latest).await.expect("first history"),
+            second.get_candles(&latest).await.expect("second history")
         );
         assert_eq!(
             first
                 .get_candles(&latest)
+                .await
                 .expect("limited history")
                 .candles
                 .len(),
@@ -395,8 +402,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn history_is_ordered_and_uses_inclusive_boundaries() {
+    #[tokio::test]
+    async fn history_is_ordered_and_uses_inclusive_boundaries() {
         let provider = MockReplayProvider::new(
             vec![instrument()],
             vec![interval()],
@@ -414,6 +421,7 @@ mod tests {
 
         let timestamps = provider
             .get_candles(&history_request)
+            .await
             .expect("history")
             .candles
             .into_iter()

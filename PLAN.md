@@ -31,7 +31,7 @@ Acceptance criteria:
 
 ## [ ] Phase 2 — Binance Spot adapter
 
-- [ ] Implement public REST historical backfill.
+- [x] Implement public REST historical backfill.
 - [ ] Implement WebSocket kline subscriptions.
 - [ ] Normalize all provider events into canonical candles.
 - [ ] Add reconnect, overlap resynchronization, rate-limit, missing-candle, and revision handling.

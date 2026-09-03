@@ -16,8 +16,11 @@ use tokio::{
 use crate::{
     database::{ConfigurationStore, UserConfiguration},
     market_data::{CandleHistoryRequest, MarketDataCatalog},
-    provider::{MarketDataProvider, ProviderError},
-    providers::mock::MockReplayProvider,
+    provider::{MarketDataProvider, ProviderError, ProviderResult},
+    providers::{
+        binance::{BinanceSpotProvider, BINANCE_PROVIDER_ID},
+        mock::{MockReplayProvider, MOCK_PROVIDER_ID},
+    },
 };
 
 const MAX_REQUEST_BYTES: usize = 65_536;
@@ -93,7 +96,7 @@ async fn respond(mut stream: TcpStream, store: &ConfigurationStore) -> io::Resul
         .as_deref()
         .filter(|origin| is_allowed_origin(origin))
         .map(str::to_owned);
-    let (status, body) = route(request, store);
+    let (status, body) = route(request, store).await;
     write_response(&mut stream, status, &body, response_origin.as_deref()).await
 }
 
@@ -107,7 +110,7 @@ fn is_allowed_origin(origin: &str) -> bool {
     )
 }
 
-fn route(request: HttpRequest, store: &ConfigurationStore) -> (&'static str, String) {
+async fn route(request: HttpRequest, store: &ConfigurationStore) -> (&'static str, String) {
     let (path, query) = request
         .path
         .split_once('?')
@@ -118,7 +121,7 @@ fn route(request: HttpRequest, store: &ConfigurationStore) -> (&'static str, Str
     match (request.method.as_str(), path) {
         ("GET", "/health") => ("200 OK", r#"{"state":"ready"}"#.to_owned()),
         ("GET", "/market-data/catalog") => market_data_catalog(query),
-        ("GET", "/market-data/candles") => candle_history(query),
+        ("GET", "/market-data/candles") => candle_history(query).await,
         ("GET", "/configuration") => match store.load() {
             Ok(configuration) => json_response(&configuration),
             Err(error) => {
@@ -154,13 +157,10 @@ fn market_data_catalog(query: Option<&str>) -> (&'static str, String) {
         return bad_market_data_request();
     };
 
-    let provider = MockReplayProvider::sample(Duration::ZERO);
-    if provider_id != provider.id() {
-        return (
-            "404 Not Found",
-            r#"{"error":"market_data_not_found"}"#.to_owned(),
-        );
-    }
+    let provider = match market_data_provider(provider_id) {
+        Ok(provider) => provider,
+        Err(_) => return market_data_not_found(),
+    };
 
     match (provider.list_symbols(), provider.list_intervals()) {
         (Ok(instruments), Ok(intervals)) => json_response(&MarketDataCatalog {
@@ -171,7 +171,7 @@ fn market_data_catalog(query: Option<&str>) -> (&'static str, String) {
     }
 }
 
-fn candle_history(query: Option<&str>) -> (&'static str, String) {
+async fn candle_history(query: Option<&str>) -> (&'static str, String) {
     let parameters = match parse_query(query.unwrap_or_default()) {
         Some(parameters) => parameters,
         None => return bad_market_data_request(),
@@ -202,23 +202,44 @@ fn candle_history(query: Option<&str>) -> (&'static str, String) {
         _ => return bad_market_data_request(),
     };
 
-    let provider = MockReplayProvider::sample(Duration::ZERO);
-    match provider.get_candles(&request) {
+    let provider = match market_data_provider(&request.provider) {
+        Ok(provider) => provider,
+        Err(_) => return market_data_not_found(),
+    };
+    match provider.get_candles(&request).await {
         Ok(response) => json_response(&response),
         Err(
             ProviderError::UnknownProvider(_)
             | ProviderError::UnknownSymbol(_)
             | ProviderError::UnknownInterval(_),
-        ) => (
-            "404 Not Found",
-            r#"{"error":"market_data_not_found"}"#.to_owned(),
+        ) => market_data_not_found(),
+        Err(ProviderError::InvalidRequest(_) | ProviderError::RequestLimitExceeded { .. }) => {
+            bad_market_data_request()
+        }
+        Err(ProviderError::RateLimited { .. }) => (
+            "429 Too Many Requests",
+            r#"{"error":"market_data_rate_limited"}"#.to_owned(),
         ),
-        Err(ProviderError::InvalidRequest(_)) => bad_market_data_request(),
         Err(error) => {
             eprintln!("could not load candle history: {error}");
             internal_error()
         }
     }
+}
+
+fn market_data_provider(provider_id: &str) -> ProviderResult<Box<dyn MarketDataProvider>> {
+    match provider_id {
+        MOCK_PROVIDER_ID => Ok(Box::new(MockReplayProvider::sample(Duration::ZERO))),
+        BINANCE_PROVIDER_ID => Ok(Box::new(BinanceSpotProvider::new()?)),
+        _ => Err(ProviderError::UnknownProvider(provider_id.to_owned())),
+    }
+}
+
+fn market_data_not_found() -> (&'static str, String) {
+    (
+        "404 Not Found",
+        r#"{"error":"market_data_not_found"}"#.to_owned(),
+    )
 }
 
 fn parse_query(query: &str) -> Option<HashMap<String, String>> {
@@ -500,8 +521,8 @@ mod tests {
         assert_eq!(catalog.intervals[2].id, "1h");
     }
 
-    #[test]
-    fn malformed_market_data_queries_are_rejected() {
+    #[tokio::test]
+    async fn malformed_market_data_queries_are_rejected() {
         let store = ConfigurationStore::open_in_memory().expect("open database");
 
         let (missing_status, _) = route(
@@ -512,7 +533,8 @@ mod tests {
                 body: Vec::new(),
             },
             &store,
-        );
+        )
+        .await;
         let (duplicate_status, _) = route(
             HttpRequest {
                 method: "GET".to_owned(),
@@ -522,7 +544,8 @@ mod tests {
                 body: Vec::new(),
             },
             &store,
-        );
+        )
+        .await;
         let (extra_catalog_status, _) = route(
             HttpRequest {
                 method: "GET".to_owned(),
@@ -531,7 +554,8 @@ mod tests {
                 body: Vec::new(),
             },
             &store,
-        );
+        )
+        .await;
 
         assert_eq!(missing_status, "400 Bad Request");
         assert_eq!(duplicate_status, "400 Bad Request");
@@ -555,8 +579,8 @@ mod tests {
         assert!(response.ends_with(r#"{"error":"invalid_configuration"}"#));
     }
 
-    #[test]
-    fn configuration_updates_are_persisted_by_the_api() {
+    #[tokio::test]
+    async fn configuration_updates_are_persisted_by_the_api() {
         let store = ConfigurationStore::open_in_memory().expect("open database");
         let body = br#"{"theme":"dark","locale":"en-GB","time_zone":"Europe/Kaliningrad"}"#;
 
@@ -568,7 +592,8 @@ mod tests {
                 body: body.to_vec(),
             },
             &store,
-        );
+        )
+        .await;
         let (load_status, saved) = route(
             HttpRequest {
                 method: "GET".to_owned(),
@@ -577,7 +602,8 @@ mod tests {
                 body: Vec::new(),
             },
             &store,
-        );
+        )
+        .await;
 
         assert_eq!(save_status, "200 OK");
         assert_eq!(load_status, "200 OK");

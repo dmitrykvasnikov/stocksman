@@ -71,3 +71,9 @@ Replay subscriptions preserve fixture order rather than sanitizing it. This allo
 The provider-neutral candle store keys each series by provider, symbol, and interval, then keys candles by UTC opening timestamp. Inserts may arrive in any order. An exact repeat is a no-op, while a different candle with the same identity is a revision and the most recently received value wins. Ordered snapshots are isolated copies so callers cannot mutate cached state.
 
 Gap detection compares adjacent stored timestamps against the selected interval definition. Seconds through weeks use checked fixed-duration arithmetic; months advance by UTC calendar months and are never approximated as a fixed number of days. Historical batches are validated in full before any candle is stored, preventing partially applied invalid responses.
+
+## D015 — Binance public-history transport
+
+Use Binance's unauthenticated market-data-only HTTPS host for Spot kline history. The adapter sends UTC millisecond bounds directly to `GET /api/v3/klines`, enforces the provider's 1,000-candle maximum, and converts the provider tuple response to canonical candles before returning it. A kline is closed only after its provider-supplied closing timestamp has passed.
+
+Historical provider calls are asynchronous so external HTTPS requests never block a Tokio backend worker. Transport failures, malformed provider payloads, unknown streams, request-limit violations, and rate limiting remain distinct provider errors that the local API can translate without exposing Binance response types to callers.

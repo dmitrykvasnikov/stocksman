@@ -6,7 +6,7 @@ Trading execution, exchange accounts, API keys, balances, portfolios, alerts, no
 
 ## Development status
 
-The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The backend applies versioned SQLite migrations and persists typed user preferences. Provider-neutral market-data contracts define instruments, intervals, candle history, live upserts, and validated canonical candles. An offline mock provider supplies deterministic history and replay streams for the five initial symbols without network access. The in-memory candle store orders out-of-order delivery, ignores exact duplicates, applies revisions, and reports missing interval openings. The desktop workbench renders a configurable candlestick and volume chart from that deterministic history, including provider-backed symbol and timeframe selectors, price and time axes, and OHLCV hover details. Continuous integration verifies Linux and Windows desktop builds. The next pending work is tracked in [`PLAN.md`](PLAN.md).
+The Tauri 2 desktop shell starts and supervises a Rust/Tokio backend companion process over an OS-assigned loopback port. The backend applies versioned SQLite migrations and persists typed user preferences. Provider-neutral market-data contracts define instruments, intervals, candle history, live upserts, and validated canonical candles. An offline mock provider supplies deterministic history and replay streams for the five initial symbols without network access. A Binance Spot adapter fetches public historical klines over HTTPS and normalizes them at the provider boundary. The in-memory candle store orders out-of-order delivery, ignores exact duplicates, applies revisions, and reports missing interval openings. The desktop workbench renders a configurable candlestick and volume chart from deterministic mock history, including provider-backed symbol and timeframe selectors, price and time axes, and OHLCV hover details. Continuous integration verifies Linux and Windows desktop builds. The next pending work is tracked in [`PLAN.md`](PLAN.md).
 
 ## Offline market data
 
@@ -17,6 +17,18 @@ Historical queries return timestamp-ordered candles with inclusive time bounds a
 The desktop chart requests canonical history from `GET /market-data/candles` on the private loopback backend. The endpoint accepts `provider`, `symbol`, and `interval`, plus optional `start_timestamp`, `end_timestamp`, and `limit` query parameters. The chart tab loads provider-neutral instruments and intervals from `GET /market-data/catalog`, and its symbol and timeframe selectors request the newest 80 candles for the selected series. The SVG chart supports drag or arrow-key panning, wheel or button zooming, viewport reset, and crosshair OHLCV inspection. Tab persistence and multiple independent tabs remain part of the later chart-workbench phase.
 
 The provider-neutral in-memory store accepts historical batches and live upserts. A batch is fully validated before it changes the cache. Snapshots are ordered by UTC opening timestamp, exact duplicate events are ignored, and a later value for the same provider, symbol, interval, and timestamp replaces the earlier revision. An integration test feeds deliberately duplicated and out-of-order mock replay events through this boundary and verifies the resulting ordered series. Gap detection uses the provider's interval definition, including real UTC calendar-month boundaries.
+
+## Binance historical data
+
+The `binance` provider uses Binance's public market-data-only host and `GET /api/v3/klines`; it does not use API keys or account access. Request it through the same private backend endpoint as the mock provider, for example:
+
+```text
+GET /market-data/candles?provider=binance&symbol=BTCUSDT&interval=1h&limit=80
+```
+
+Optional `start_timestamp` and `end_timestamp` values are forwarded as inclusive millisecond boundaries. The adapter enforces Binance's 1,000-row maximum, preserves UTC opening timestamps, parses the exchange's decimal strings into finite canonical OHLCV values, and determines the `closed` flag from each kline's closing time. It also exposes the configured five-symbol catalog and Binance Spot interval mapping, although switching the desktop chart from the mock provider is a later plan item.
+
+The transport behavior follows Binance's official [Spot REST API documentation](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#klinecandlestick-data) and [market-data-only endpoint guidance](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/market_data_only.md). Automated tests use a temporary local HTTP server rather than the live service.
 
 ## Required tools
 
