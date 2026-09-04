@@ -120,8 +120,23 @@ footer {
   display: flex;
   min-height: 43px;
   align-items: end;
+  gap: 8px;
   margin-bottom: 24px;
   border-bottom: 1px solid #1c2635;
+}
+
+.chart-tab-list {
+  display: flex;
+  min-width: 0;
+  align-items: end;
+  gap: 2px;
+  overflow-x: auto;
+}
+
+.chart-tab-item {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
 }
 
 .chart-tab {
@@ -130,19 +145,74 @@ footer {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 12px 15px 11px;
+  padding: 12px 34px 11px 15px;
   border: 0;
-  border-bottom: 2px solid #58dfc2;
-  color: #d9e3f1;
-  background: rgb(54 190 161 / 7%);
+  border-bottom: 2px solid transparent;
+  color: #77859a;
+  background: transparent;
   font-size: 0.78rem;
   font-weight: 650;
+  cursor: pointer;
+}
+
+.chart-tab[aria-selected="true"] {
+  border-bottom-color: #58dfc2;
+  color: #d9e3f1;
+  background: rgb(54 190 161 / 7%);
+}
+
+.chart-tab:hover,
+.chart-tab:focus-visible {
+  color: #d9e3f1;
+  outline: none;
+  background: rgb(54 190 161 / 5%);
 }
 
 .chart-tab small {
   color: #6d7a90;
   font-size: 0.68rem;
   font-weight: 650;
+}
+
+.chart-tab-close {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  translate: 0 -50%;
+  border: 0;
+  border-radius: 6px;
+  color: #59677c;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.chart-tab-close:hover,
+.chart-tab-close:focus-visible,
+.chart-tab-add:hover,
+.chart-tab-add:focus-visible {
+  color: #d9e3f1;
+  outline: none;
+  background: #182231;
+}
+
+.chart-tab-add {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 7px;
+  padding: 0;
+  border: 1px solid #263246;
+  border-radius: 8px;
+  color: #7f8da2;
+  background: #0d131d;
+  cursor: pointer;
+  font-size: 1rem;
 }
 
 .workbench-heading {

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import CandlestickChart from "./CandlestickChart";
 import {
@@ -19,6 +19,12 @@ interface RuntimeInfo {
     state: BackendState;
     endpoint: string | null;
   };
+}
+
+interface ChartTab {
+  id: number;
+  symbol: string;
+  interval: string;
 }
 
 const statusCopy: Record<RuntimeState, string> = {
@@ -44,6 +50,96 @@ const fallbackCatalog: MarketDataCatalog = {
   intervals: [{ id: DEFAULT_INTERVAL, label: "1 hour", amount: 1, unit: "hour" }],
 };
 
+interface ChartTabPanelProps {
+  active: boolean;
+  backendEndpoint: string | null | undefined;
+  runtimeState: RuntimeState;
+  tab: ChartTab;
+}
+
+function ChartTabPanel({
+  active,
+  backendEndpoint,
+  runtimeState,
+  tab,
+}: ChartTabPanelProps) {
+  const requestKey = `${backendEndpoint ?? "offline"}:${tab.symbol}:${tab.interval}`;
+  const [loadState, setLoadState] = useState<{
+    requestKey: string;
+    candles: Candle[];
+    chartError: boolean;
+  }>({ requestKey: "", candles: [], chartError: false });
+  const candles = loadState.requestKey === requestKey ? loadState.candles : [];
+  const chartError = loadState.requestKey === requestKey && loadState.chartError;
+
+  useEffect(() => {
+    if (!backendEndpoint) {
+      return;
+    }
+
+    let mounted = true;
+    const controller = new AbortController();
+    void loadCandleHistory(
+      backendEndpoint,
+      {
+        provider: PROVIDER,
+        symbol: tab.symbol,
+        interval: tab.interval,
+        start_timestamp: null,
+        end_timestamp: null,
+        limit: 80,
+      },
+      controller.signal,
+    )
+      .then((history) => {
+        if (mounted) {
+          setLoadState({ requestKey, candles: history.candles, chartError: false });
+        }
+      })
+      .catch((error: unknown) => {
+        if (mounted && !(error instanceof DOMException && error.name === "AbortError")) {
+          setLoadState({ requestKey, candles: [], chartError: true });
+        }
+      });
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [backendEndpoint, requestKey, tab.interval, tab.symbol]);
+
+  return (
+    <div
+      id={`chart-panel-${tab.id}`}
+      role="tabpanel"
+      aria-labelledby={`chart-tab-${tab.id}`}
+      hidden={!active}
+    >
+      <div className="chart-card">
+        {candles.length > 0 ? (
+          <CandlestickChart key={`${tab.symbol}-${tab.interval}`} candles={candles} />
+        ) : (
+          <div className="chart-empty" role="status">
+            <div className="chart-empty-grid" aria-hidden="true" />
+            <strong>
+              {chartError
+                ? "Candle history is unavailable"
+                : runtimeState === "browser"
+                  ? "Open the desktop app to load Binance Spot data"
+                  : "Loading Binance candles…"}
+            </strong>
+            <span>
+              {chartError
+                ? "The chart will retry when the local backend reconnects."
+                : "No Binance account or credentials are required."}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function isTauriRuntime(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
@@ -54,10 +150,11 @@ export default function App() {
   );
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [catalog, setCatalog] = useState<MarketDataCatalog>(fallbackCatalog);
-  const [symbol, setSymbol] = useState(DEFAULT_SYMBOL);
-  const [interval, setInterval] = useState(DEFAULT_INTERVAL);
-  const [candles, setCandles] = useState<Candle[]>([]);
-  const [chartError, setChartError] = useState(false);
+  const [tabs, setTabs] = useState<ChartTab[]>([
+    { id: 1, symbol: DEFAULT_SYMBOL, interval: DEFAULT_INTERVAL },
+  ]);
+  const [activeTabId, setActiveTabId] = useState(1);
+  const nextTabId = useRef(2);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -98,51 +195,52 @@ export default function App() {
     const controller = new AbortController();
     void loadMarketDataCatalog(backendEndpoint, PROVIDER, controller.signal)
       .then(setCatalog)
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setChartError(true);
-        }
-      });
+      .catch(() => undefined);
 
     return () => controller.abort();
   }, [backendEndpoint]);
 
-  useEffect(() => {
-    if (!backendEndpoint) {
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
+
+  const updateActiveTab = (updates: Partial<Pick<ChartTab, "symbol" | "interval">>) => {
+    setTabs((currentTabs) =>
+      currentTabs.map((tab) => (tab.id === activeTab.id ? { ...tab, ...updates } : tab)),
+    );
+  };
+
+  const addTab = () => {
+    const newTab = { ...activeTab, id: nextTabId.current };
+    nextTabId.current += 1;
+    setTabs((currentTabs) => [...currentTabs, newTab]);
+    setActiveTabId(newTab.id);
+  };
+
+  const closeTab = (tabId: number) => {
+    if (tabs.length === 1) {
       return;
     }
 
-    const controller = new AbortController();
-    void loadCandleHistory(
-      backendEndpoint,
-      {
-        provider: PROVIDER,
-        symbol,
-        interval,
-        start_timestamp: null,
-        end_timestamp: null,
-        limit: 80,
-      },
-      controller.signal,
-    )
-      .then((history) => {
-        setCandles(history.candles);
-        setChartError(false);
-      })
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setChartError(true);
-        }
-      });
+    const closingIndex = tabs.findIndex((tab) => tab.id === tabId);
+    const nextActiveTab = tabs[closingIndex + 1] ?? tabs[closingIndex - 1];
+    setTabs((currentTabs) => currentTabs.filter((tab) => tab.id !== tabId));
+    if (tabId === activeTabId) {
+      setActiveTabId(nextActiveTab.id);
+    }
+  };
 
-    return () => controller.abort();
-  }, [backendEndpoint, interval, symbol]);
+  const selectTabByIndex = (nextIndex: number) => {
+    const nextTab = tabs[nextIndex];
+    setActiveTabId(nextTab.id);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`chart-tab-${nextTab.id}`)?.focus();
+    });
+  };
 
   const selectedInstrument =
-    catalog.instruments.find((instrument) => instrument.symbol === symbol) ??
+    catalog.instruments.find((instrument) => instrument.symbol === activeTab.symbol) ??
     fallbackCatalog.instruments[0];
   const selectedInterval =
-    catalog.intervals.find((definition) => definition.id === interval) ??
+    catalog.intervals.find((definition) => definition.id === activeTab.interval) ??
     fallbackCatalog.intervals[0];
 
   return (
@@ -161,12 +259,57 @@ export default function App() {
       </header>
 
       <section className="workbench" aria-labelledby="chart-title">
-        <div className="chart-tabs" role="tablist" aria-label="Chart tabs">
-          <button className="chart-tab" type="button" role="tab" aria-selected="true">
-            <span>
-              {selectedInstrument.base_asset} / {selectedInstrument.quote_asset}
-            </span>
-            <small>{selectedInterval.id}</small>
+        <div className="chart-tabs">
+          <div className="chart-tab-list" role="tablist" aria-label="Chart tabs">
+            {tabs.map((tab, index) => {
+              const instrument =
+                catalog.instruments.find((item) => item.symbol === tab.symbol) ??
+                fallbackCatalog.instruments[0];
+              const isActive = tab.id === activeTab.id;
+
+              return (
+                <div className="chart-tab-item" key={tab.id}>
+                  <button
+                    id={`chart-tab-${tab.id}`}
+                    className="chart-tab"
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    aria-controls={`chart-panel-${tab.id}`}
+                    tabIndex={isActive ? 0 : -1}
+                    onClick={() => setActiveTabId(tab.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                        event.preventDefault();
+                        const direction = event.key === "ArrowLeft" ? -1 : 1;
+                        selectTabByIndex((index + direction + tabs.length) % tabs.length);
+                      } else if (event.key === "Home" || event.key === "End") {
+                        event.preventDefault();
+                        selectTabByIndex(event.key === "Home" ? 0 : tabs.length - 1);
+                      }
+                    }}
+                  >
+                    <span>
+                      {instrument.base_asset} / {instrument.quote_asset}
+                    </span>
+                    <small>{tab.interval}</small>
+                  </button>
+                  {tabs.length > 1 ? (
+                    <button
+                      className="chart-tab-close"
+                      type="button"
+                      aria-label={`Close ${instrument.base_asset} / ${instrument.quote_asset} ${tab.interval} chart tab`}
+                      onClick={() => closeTab(tab.id)}
+                    >
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          <button className="chart-tab-add" type="button" aria-label="Add chart tab" onClick={addTab}>
+            <span aria-hidden="true">+</span>
           </button>
         </div>
 
@@ -184,12 +327,8 @@ export default function App() {
             <label>
               <span>Symbol</span>
               <select
-                value={symbol}
-                onChange={(event) => {
-                  setCandles([]);
-                  setChartError(false);
-                  setSymbol(event.target.value);
-                }}
+                value={activeTab.symbol}
+                onChange={(event) => updateActiveTab({ symbol: event.target.value })}
               >
                 {catalog.instruments.map((instrument) => (
                   <option key={instrument.symbol} value={instrument.symbol}>
@@ -201,12 +340,8 @@ export default function App() {
             <label>
               <span>Timeframe</span>
               <select
-                value={interval}
-                onChange={(event) => {
-                  setCandles([]);
-                  setChartError(false);
-                  setInterval(event.target.value);
-                }}
+                value={activeTab.interval}
+                onChange={(event) => updateActiveTab({ interval: event.target.value })}
               >
                 {catalog.intervals.map((definition) => (
                   <option key={definition.id} value={definition.id}>
@@ -222,27 +357,15 @@ export default function App() {
           </div>
         </div>
 
-        <div className="chart-card">
-          {candles.length > 0 ? (
-            <CandlestickChart key={`${symbol}-${interval}`} candles={candles} />
-          ) : (
-            <div className="chart-empty" role="status">
-              <div className="chart-empty-grid" aria-hidden="true" />
-              <strong>
-                {chartError
-                  ? "Candle history is unavailable"
-                  : runtimeState === "browser"
-                    ? "Open the desktop app to load Binance Spot data"
-                    : "Loading Binance candles…"}
-              </strong>
-              <span>
-                {chartError
-                  ? "The chart will retry when the local backend reconnects."
-                  : "No Binance account or credentials are required."}
-              </span>
-            </div>
-          )}
-        </div>
+        {tabs.map((tab) => (
+          <ChartTabPanel
+            key={tab.id}
+            active={tab.id === activeTab.id}
+            backendEndpoint={backendEndpoint}
+            runtimeState={runtimeState}
+            tab={tab}
+          />
+        ))}
       </section>
 
       <footer>No accounts · No API keys · No trading</footer>

@@ -46,7 +46,7 @@ Acceptance criteria:
 ## [ ] Phase 3 — Chart workbench
 
 - [x] Select and verify a permissively licensed chart library.
-- [ ] Add multiple independent tabs.
+- [x] Add multiple independent tabs.
 - [ ] Add symbol, interval, signal visibility, and viewport controls.
 - [ ] Persist tab and display preferences.
 - [ ] Add loading, stale, gap, error, and reconnect states.

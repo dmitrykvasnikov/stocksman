@@ -36,7 +36,7 @@ describe("App", () => {
     expect(screen.getByText(/no accounts · no api keys · no trading/i)).toBeInTheDocument();
   });
 
-  it("reports the supervised backend state in the desktop runtime", async () => {
+  it("loads Binance controls and keeps multiple desktop chart tabs independent", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
       value: {},
@@ -158,5 +158,41 @@ describe("App", () => {
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
+
+    const firstTab = screen.getByRole("tab", { name: /eth \/ usdt 5m/i });
+    fireEvent.click(screen.getByRole("button", { name: "Add chart tab" }));
+
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(firstTab).toHaveAttribute("aria-selected", "false");
+    expect(screen.getAllByRole("tab", { name: /eth \/ usdt 5m/i })[1]).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Symbol" }), {
+      target: { value: "SOLUSDT" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Timeframe" }), {
+      target: { value: "1d" },
+    });
+
+    expect(await screen.findByRole("heading", { name: "SOL / USDT" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /sol \/ usdt 1d/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    fireEvent.click(firstTab);
+    expect(screen.getByRole("combobox", { name: "Symbol" })).toHaveValue("ETHUSDT");
+    expect(screen.getByRole("combobox", { name: "Timeframe" })).toHaveValue("5m");
+    expect(firstTab).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: /close eth \/ usdt 5m chart tab/i }));
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(screen.getByRole("tab", { name: /sol \/ usdt 1d/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("combobox", { name: "Symbol" })).toHaveValue("SOLUSDT");
   });
 });
