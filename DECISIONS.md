@@ -123,3 +123,9 @@ All Binance payload structures remain private to the adapter. Downstream provide
 Binance subscriptions reconnect with bounded exponential backoff until explicitly cancelled. After reconnecting, the adapter requests REST history beginning at the latest observed opening timestamp, deliberately overlapping that candle so a provider revision is not lost. Recovery is paginated beyond Binance's 1,000-row response limit, and a jump in live opening timestamps triggers the same bounded recovery through the incoming timestamp before that event is delivered.
 
 REST recovery honors Binance's `Retry-After` response when rate limited and otherwise uses the reconnect backoff. Exact repeats from the overlap are suppressed inside the adapter, while changed candles at the same timestamp remain provider-neutral upsert events so the candle store can apply its last-write-wins revision semantics. Cancellation interrupts reconnect and rate-limit waits.
+
+## D019 — Persisted chart workspace
+
+Store the active tab and each tab's provider, symbol, interval, signal visibility, and viewport in the existing typed user-configuration document. The workspace is bounded to 12 tabs and validated before SQLite writes; older configuration documents receive a default BTCUSDT one-hour workspace through schema defaults.
+
+Persist manual viewport positions by UTC candle opening timestamp rather than array index so the same candle remains anchored when history is extended. A following viewport stores no start timestamp and continues to track the latest candle after restoration.

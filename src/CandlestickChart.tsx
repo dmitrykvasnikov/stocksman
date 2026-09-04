@@ -1,10 +1,25 @@
-import { useRef, useState, type KeyboardEvent, type PointerEvent, type WheelEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type WheelEvent,
+} from "react";
 
 import type { Candle } from "./marketData";
 
 interface CandlestickChartProps {
   candles: Candle[];
   signalsVisible?: boolean;
+  initialViewport?: ChartViewport;
+  onViewportChange?: (viewport: ChartViewport) => void;
+}
+
+export interface ChartViewport {
+  visibleCandleCount: number | null;
+  startTimestamp: number | null;
+  followLatest: boolean;
 }
 
 interface DragState {
@@ -54,17 +69,21 @@ function clamp(value: number, minimum: number, maximum: number): number {
 export default function CandlestickChart({
   candles,
   signalsVisible = true,
+  initialViewport,
+  onViewportChange,
 }: CandlestickChartProps) {
-  const [requestedVisibleCount, setRequestedVisibleCount] = useState<number | null>(null);
-  const [requestedStartIndex, setRequestedStartIndex] = useState(0);
-  const [isFollowingLatest, setIsFollowingLatest] = useState(true);
+  const [requestedVisibleCount, setRequestedVisibleCount] = useState<number | null>(
+    initialViewport?.visibleCandleCount ?? null,
+  );
+  const [requestedStartTimestamp, setRequestedStartTimestamp] = useState<number | null>(
+    initialViewport?.startTimestamp ?? null,
+  );
+  const [isFollowingLatest, setIsFollowingLatest] = useState(
+    initialViewport?.followLatest ?? true,
+  );
   const [inspectedTimestamp, setInspectedTimestamp] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragState = useRef<DragState | null>(null);
-
-  if (candles.length === 0) {
-    return null;
-  }
 
   const minimumVisibleCount = Math.min(MIN_VISIBLE_CANDLES, candles.length);
   const visibleCount = clamp(
@@ -73,9 +92,33 @@ export default function CandlestickChart({
     candles.length,
   );
   const maximumStartIndex = candles.length - visibleCount;
+  const matchingStartIndex =
+    requestedStartTimestamp === null
+      ? 0
+      : candles.findIndex((candle) => candle.timestamp >= requestedStartTimestamp);
+  const requestedStartIndex = matchingStartIndex === -1 ? maximumStartIndex : matchingStartIndex;
   const startIndex = isFollowingLatest
     ? maximumStartIndex
     : clamp(requestedStartIndex, 0, maximumStartIndex);
+
+  useEffect(() => {
+    onViewportChange?.({
+      visibleCandleCount: requestedVisibleCount,
+      startTimestamp: isFollowingLatest ? null : (candles[startIndex]?.timestamp ?? null),
+      followLatest: isFollowingLatest,
+    });
+  }, [
+    candles,
+    isFollowingLatest,
+    onViewportChange,
+    requestedVisibleCount,
+    startIndex,
+  ]);
+
+  if (candles.length === 0) {
+    return null;
+  }
+
   const visibleCandles = candles.slice(startIndex, startIndex + visibleCount);
   const inspectedCandle =
     visibleCandles.find((candle) => candle.timestamp === inspectedTimestamp) ??
@@ -106,7 +149,9 @@ export default function CandlestickChart({
 
   const setViewportStart = (nextStartIndex: number) => {
     setIsFollowingLatest(false);
-    setRequestedStartIndex(clamp(nextStartIndex, 0, maximumStartIndex));
+    setRequestedStartTimestamp(
+      candles[clamp(nextStartIndex, 0, maximumStartIndex)].timestamp,
+    );
   };
 
   const zoom = (direction: "in" | "out", anchorRatio = 0.5) => {
@@ -123,19 +168,21 @@ export default function CandlestickChart({
     const nextStartIndex = Math.round(anchoredIndex - nextVisibleCount * anchorRatio);
     setIsFollowingLatest(false);
     setRequestedVisibleCount(nextVisibleCount);
-    setRequestedStartIndex(clamp(nextStartIndex, 0, candles.length - nextVisibleCount));
+    setRequestedStartTimestamp(
+      candles[clamp(nextStartIndex, 0, candles.length - nextVisibleCount)].timestamp,
+    );
     setInspectedTimestamp(null);
   };
 
   const resetViewport = () => {
     setRequestedVisibleCount(null);
-    setRequestedStartIndex(0);
+    setRequestedStartTimestamp(null);
     setIsFollowingLatest(true);
     setInspectedTimestamp(null);
   };
 
   const followLatest = () => {
-    setRequestedStartIndex(maximumStartIndex);
+    setRequestedStartTimestamp(null);
     setIsFollowingLatest(true);
     setInspectedTimestamp(null);
   };
@@ -310,7 +357,7 @@ export default function CandlestickChart({
             onClick={() => {
               if (isFollowingLatest) {
                 setIsFollowingLatest(false);
-                setRequestedStartIndex(startIndex);
+                setRequestedStartTimestamp(candles[startIndex].timestamp);
               } else {
                 followLatest();
               }

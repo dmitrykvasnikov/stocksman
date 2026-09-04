@@ -119,6 +119,7 @@ async fn route(request: HttpRequest, store: &ConfigurationStore) -> (&'static st
         });
 
     match (request.method.as_str(), path) {
+        ("OPTIONS", "/configuration") => ("204 No Content", String::new()),
         ("GET", "/health") => ("200 OK", r#"{"state":"ready"}"#.to_owned()),
         ("GET", "/market-data/catalog") => market_data_catalog(query),
         ("GET", "/market-data/candles") => candle_history(query).await,
@@ -409,7 +410,9 @@ async fn write_response(
     allowed_origin: Option<&str>,
 ) -> io::Result<()> {
     let access_control_headers = allowed_origin.map_or_else(String::new, |origin| {
-        format!("Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\n")
+        format!(
+            "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Methods: GET, PUT, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nVary: Origin\r\n"
+        )
     });
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{access_control_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -474,7 +477,10 @@ mod tests {
         .await;
 
         assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.ends_with(r#"{"theme":"system","locale":null,"time_zone":null}"#));
+        let (_, body) = response.split_once("\r\n\r\n").expect("HTTP response body");
+        let configuration: UserConfiguration =
+            serde_json::from_str(body).expect("configuration JSON");
+        assert_eq!(configuration, UserConfiguration::default());
     }
 
     #[tokio::test]
@@ -600,7 +606,7 @@ mod tests {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("bind loopback listener");
-        let body = r#"{"theme":"system","locale":"","time_zone":null}"#;
+        let body = r#"{"theme":"system","locale":"","time_zone":null,"workspace":{"tabs":[{"id":1,"provider":"binance","symbol":"BTCUSDT","interval":"1h","signals_visible":true,"viewport":{"visible_candle_count":null,"start_timestamp":null,"follow_latest":true}}],"active_tab_id":1}}"#;
         let raw_request = format!(
             "PUT /configuration HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
@@ -615,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn configuration_updates_are_persisted_by_the_api() {
         let store = ConfigurationStore::open_in_memory().expect("open database");
-        let body = br#"{"theme":"dark","locale":"en-GB","time_zone":"Europe/Kaliningrad"}"#;
+        let body = br#"{"theme":"dark","locale":"en-GB","time_zone":"Europe/Kaliningrad","workspace":{"tabs":[{"id":1,"provider":"binance","symbol":"ETHUSDT","interval":"5m","signals_visible":false,"viewport":{"visible_candle_count":40,"start_timestamp":1704067200000,"follow_latest":false}}],"active_tab_id":1}}"#;
 
         let (save_status, _) = route(
             HttpRequest {
@@ -641,6 +647,24 @@ mod tests {
         assert_eq!(save_status, "200 OK");
         assert_eq!(load_status, "200 OK");
         assert_eq!(saved.as_bytes(), body);
+    }
+
+    #[tokio::test]
+    async fn configuration_writes_allow_the_desktop_origin_preflight() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind loopback listener");
+
+        let response = request(
+            listener,
+            "OPTIONS /configuration HTTP/1.1\r\nHost: localhost\r\nOrigin: http://tauri.localhost\r\nAccess-Control-Request-Method: PUT\r\nAccess-Control-Request-Headers: content-type\r\n\r\n",
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+        assert!(response.contains("Access-Control-Allow-Origin: http://tauri.localhost\r\n"));
+        assert!(response.contains("Access-Control-Allow-Methods: GET, PUT, OPTIONS\r\n"));
+        assert!(response.contains("Access-Control-Allow-Headers: Content-Type\r\n"));
     }
 
     #[tokio::test]

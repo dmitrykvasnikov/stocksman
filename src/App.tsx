@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import CandlestickChart from "./CandlestickChart";
+import CandlestickChart, { type ChartViewport } from "./CandlestickChart";
+import {
+  loadUserConfiguration,
+  saveUserConfiguration,
+  type UserConfiguration,
+  type WorkspaceConfiguration,
+} from "./configuration";
 import {
   loadCandleHistory,
   loadMarketDataCatalog,
@@ -23,9 +29,16 @@ interface RuntimeInfo {
 
 interface ChartTab {
   id: number;
+  provider: string;
   symbol: string;
   interval: string;
   signalsVisible: boolean;
+  viewport: ChartViewport;
+}
+
+interface WorkspaceState {
+  tabs: ChartTab[];
+  activeTabId: number;
 }
 
 const statusCopy: Record<RuntimeState, string> = {
@@ -38,6 +51,63 @@ const statusCopy: Record<RuntimeState, string> = {
 const PROVIDER = "binance";
 const DEFAULT_SYMBOL = "BTCUSDT";
 const DEFAULT_INTERVAL = "1h";
+const MAX_CHART_TABS = 12;
+
+const defaultViewport: ChartViewport = {
+  visibleCandleCount: null,
+  startTimestamp: null,
+  followLatest: true,
+};
+
+const defaultWorkspace: WorkspaceState = {
+  tabs: [
+    {
+      id: 1,
+      provider: PROVIDER,
+      symbol: DEFAULT_SYMBOL,
+      interval: DEFAULT_INTERVAL,
+      signalsVisible: true,
+      viewport: defaultViewport,
+    },
+  ],
+  activeTabId: 1,
+};
+
+function fromConfiguration(workspace: WorkspaceConfiguration): WorkspaceState {
+  return {
+    tabs: workspace.tabs.map((tab) => ({
+      id: tab.id,
+      provider: tab.provider,
+      symbol: tab.symbol,
+      interval: tab.interval,
+      signalsVisible: tab.signals_visible,
+      viewport: {
+        visibleCandleCount: tab.viewport.visible_candle_count,
+        startTimestamp: tab.viewport.start_timestamp,
+        followLatest: tab.viewport.follow_latest,
+      },
+    })),
+    activeTabId: workspace.active_tab_id,
+  };
+}
+
+function toConfiguration(workspace: WorkspaceState): WorkspaceConfiguration {
+  return {
+    tabs: workspace.tabs.map((tab) => ({
+      id: tab.id,
+      provider: tab.provider,
+      symbol: tab.symbol,
+      interval: tab.interval,
+      signals_visible: tab.signalsVisible,
+      viewport: {
+        visible_candle_count: tab.viewport.visibleCandleCount,
+        start_timestamp: tab.viewport.startTimestamp,
+        follow_latest: tab.viewport.followLatest,
+      },
+    })),
+    active_tab_id: workspace.activeTabId,
+  };
+}
 
 const fallbackCatalog: MarketDataCatalog = {
   instruments: [
@@ -56,6 +126,7 @@ interface ChartTabPanelProps {
   backendEndpoint: string | null | undefined;
   runtimeState: RuntimeState;
   tab: ChartTab;
+  onViewportChange: (tabId: number, viewport: ChartViewport) => void;
 }
 
 function ChartTabPanel({
@@ -63,8 +134,9 @@ function ChartTabPanel({
   backendEndpoint,
   runtimeState,
   tab,
+  onViewportChange,
 }: ChartTabPanelProps) {
-  const requestKey = `${backendEndpoint ?? "offline"}:${tab.symbol}:${tab.interval}`;
+  const requestKey = `${backendEndpoint ?? "offline"}:${tab.provider}:${tab.symbol}:${tab.interval}`;
   const [loadState, setLoadState] = useState<{
     requestKey: string;
     candles: Candle[];
@@ -83,7 +155,7 @@ function ChartTabPanel({
     void loadCandleHistory(
       backendEndpoint,
       {
-        provider: PROVIDER,
+        provider: tab.provider,
         symbol: tab.symbol,
         interval: tab.interval,
         start_timestamp: null,
@@ -107,7 +179,7 @@ function ChartTabPanel({
       mounted = false;
       controller.abort();
     };
-  }, [backendEndpoint, requestKey, tab.interval, tab.symbol]);
+  }, [backendEndpoint, requestKey, tab.interval, tab.provider, tab.symbol]);
 
   return (
     <div
@@ -121,6 +193,8 @@ function ChartTabPanel({
           <CandlestickChart
             key={`${tab.symbol}-${tab.interval}`}
             candles={candles}
+            initialViewport={tab.viewport}
+            onViewportChange={(viewport) => onViewportChange(tab.id, viewport)}
             signalsVisible={tab.signalsVisible}
           />
         ) : (
@@ -155,16 +229,11 @@ export default function App() {
   );
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [catalog, setCatalog] = useState<MarketDataCatalog>(fallbackCatalog);
-  const [tabs, setTabs] = useState<ChartTab[]>([
-    {
-      id: 1,
-      symbol: DEFAULT_SYMBOL,
-      interval: DEFAULT_INTERVAL,
-      signalsVisible: true,
-    },
-  ]);
-  const [activeTabId, setActiveTabId] = useState(1);
+  const [workspace, setWorkspace] = useState<WorkspaceState>(defaultWorkspace);
+  const [userConfiguration, setUserConfiguration] = useState<UserConfiguration | null>(null);
+  const [configurationEndpoint, setConfigurationEndpoint] = useState<string | null>(null);
   const nextTabId = useRef(2);
+  const { tabs, activeTabId } = workspace;
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -210,19 +279,97 @@ export default function App() {
     return () => controller.abort();
   }, [backendEndpoint]);
 
+  useEffect(() => {
+    if (!backendEndpoint) {
+      return;
+    }
+
+    let active = true;
+    const controller = new AbortController();
+    void loadUserConfiguration(backendEndpoint, controller.signal)
+      .then((configuration) => {
+        if (!active) {
+          return;
+        }
+        const restoredWorkspace = fromConfiguration(configuration.workspace);
+        setWorkspace(restoredWorkspace);
+        setUserConfiguration(configuration);
+        setConfigurationEndpoint(backendEndpoint);
+        nextTabId.current = Math.max(...restoredWorkspace.tabs.map((tab) => tab.id)) + 1;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [backendEndpoint]);
+
+  useEffect(() => {
+    if (
+      !backendEndpoint ||
+      configurationEndpoint !== backendEndpoint ||
+      userConfiguration === null
+    ) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const saveTimer = window.setTimeout(() => {
+      void saveUserConfiguration(
+        backendEndpoint,
+        { ...userConfiguration, workspace: toConfiguration(workspace) },
+        controller.signal,
+      ).catch(() => undefined);
+    }, 250);
+
+    return () => {
+      window.clearTimeout(saveTimer);
+      controller.abort();
+    };
+  }, [backendEndpoint, configurationEndpoint, userConfiguration, workspace]);
+
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
 
   const updateActiveTab = (updates: Partial<Omit<ChartTab, "id">>) => {
-    setTabs((currentTabs) =>
-      currentTabs.map((tab) => (tab.id === activeTab.id ? { ...tab, ...updates } : tab)),
-    );
+    setWorkspace((currentWorkspace) => ({
+      ...currentWorkspace,
+      tabs: currentWorkspace.tabs.map((tab) =>
+        tab.id === currentWorkspace.activeTabId ? { ...tab, ...updates } : tab,
+      ),
+    }));
   };
 
+  const updateTabViewport = useCallback((tabId: number, viewport: ChartViewport) => {
+    setWorkspace((currentWorkspace) => {
+      const tab = currentWorkspace.tabs.find((candidate) => candidate.id === tabId);
+      if (
+        !tab ||
+        (tab.viewport.visibleCandleCount === viewport.visibleCandleCount &&
+          tab.viewport.startTimestamp === viewport.startTimestamp &&
+          tab.viewport.followLatest === viewport.followLatest)
+      ) {
+        return currentWorkspace;
+      }
+      return {
+        ...currentWorkspace,
+        tabs: currentWorkspace.tabs.map((candidate) =>
+          candidate.id === tabId ? { ...candidate, viewport } : candidate,
+        ),
+      };
+    });
+  }, []);
+
   const addTab = () => {
+    if (tabs.length >= MAX_CHART_TABS) {
+      return;
+    }
     const newTab = { ...activeTab, id: nextTabId.current };
     nextTabId.current += 1;
-    setTabs((currentTabs) => [...currentTabs, newTab]);
-    setActiveTabId(newTab.id);
+    setWorkspace((currentWorkspace) => ({
+      tabs: [...currentWorkspace.tabs, newTab],
+      activeTabId: newTab.id,
+    }));
   };
 
   const closeTab = (tabId: number) => {
@@ -232,15 +379,18 @@ export default function App() {
 
     const closingIndex = tabs.findIndex((tab) => tab.id === tabId);
     const nextActiveTab = tabs[closingIndex + 1] ?? tabs[closingIndex - 1];
-    setTabs((currentTabs) => currentTabs.filter((tab) => tab.id !== tabId));
-    if (tabId === activeTabId) {
-      setActiveTabId(nextActiveTab.id);
-    }
+    setWorkspace((currentWorkspace) => ({
+      tabs: currentWorkspace.tabs.filter((tab) => tab.id !== tabId),
+      activeTabId: tabId === activeTabId ? nextActiveTab.id : activeTabId,
+    }));
   };
 
   const selectTabByIndex = (nextIndex: number) => {
     const nextTab = tabs[nextIndex];
-    setActiveTabId(nextTab.id);
+    setWorkspace((currentWorkspace) => ({
+      ...currentWorkspace,
+      activeTabId: nextTab.id,
+    }));
     window.requestAnimationFrame(() => {
       document.getElementById(`chart-tab-${nextTab.id}`)?.focus();
     });
@@ -287,7 +437,12 @@ export default function App() {
                     aria-selected={isActive}
                     aria-controls={`chart-panel-${tab.id}`}
                     tabIndex={isActive ? 0 : -1}
-                    onClick={() => setActiveTabId(tab.id)}
+                    onClick={() =>
+                      setWorkspace((currentWorkspace) => ({
+                        ...currentWorkspace,
+                        activeTabId: tab.id,
+                      }))
+                    }
                     onKeyDown={(event) => {
                       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
                         event.preventDefault();
@@ -318,7 +473,13 @@ export default function App() {
               );
             })}
           </div>
-          <button className="chart-tab-add" type="button" aria-label="Add chart tab" onClick={addTab}>
+          <button
+            className="chart-tab-add"
+            type="button"
+            aria-label="Add chart tab"
+            disabled={tabs.length >= MAX_CHART_TABS}
+            onClick={addTab}
+          >
             <span aria-hidden="true">+</span>
           </button>
         </div>
@@ -338,7 +499,9 @@ export default function App() {
               <span>Symbol</span>
               <select
                 value={activeTab.symbol}
-                onChange={(event) => updateActiveTab({ symbol: event.target.value })}
+                onChange={(event) =>
+                  updateActiveTab({ symbol: event.target.value, viewport: defaultViewport })
+                }
               >
                 {catalog.instruments.map((instrument) => (
                   <option key={instrument.symbol} value={instrument.symbol}>
@@ -351,7 +514,9 @@ export default function App() {
               <span>Timeframe</span>
               <select
                 value={activeTab.interval}
-                onChange={(event) => updateActiveTab({ interval: event.target.value })}
+                onChange={(event) =>
+                  updateActiveTab({ interval: event.target.value, viewport: defaultViewport })
+                }
               >
                 {catalog.intervals.map((definition) => (
                   <option key={definition.id} value={definition.id}>
@@ -393,6 +558,7 @@ export default function App() {
             backendEndpoint={backendEndpoint}
             runtimeState={runtimeState}
             tab={tab}
+            onViewportChange={updateTabViewport}
           />
         ))}
       </section>

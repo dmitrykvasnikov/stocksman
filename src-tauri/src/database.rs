@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fmt, fs,
     path::Path,
     sync::{Mutex, MutexGuard},
@@ -15,6 +16,9 @@ const MIGRATIONS: &[Migration] = &[Migration {
 
 const CONFIGURATION_ID: i64 = 1;
 const MAX_PREFERENCE_LENGTH: usize = 128;
+const MAX_IDENTIFIER_LENGTH: usize = 128;
+const MAX_CHART_TABS: usize = 12;
+const MAX_VISIBLE_CANDLES: u32 = 10_000;
 
 struct Migration {
     version: i64,
@@ -36,6 +40,7 @@ pub struct UserConfiguration {
     pub theme: ThemePreference,
     pub locale: Option<String>,
     pub time_zone: Option<String>,
+    pub workspace: WorkspaceConfiguration,
 }
 
 impl Default for UserConfiguration {
@@ -44,6 +49,7 @@ impl Default for UserConfiguration {
             theme: ThemePreference::System,
             locale: None,
             time_zone: None,
+            workspace: WorkspaceConfiguration::default(),
         }
     }
 }
@@ -51,7 +57,122 @@ impl Default for UserConfiguration {
 impl UserConfiguration {
     pub fn validate(&self) -> Result<(), PersistenceError> {
         validate_optional_preference("locale", self.locale.as_deref())?;
-        validate_optional_preference("time_zone", self.time_zone.as_deref())
+        validate_optional_preference("time_zone", self.time_zone.as_deref())?;
+        self.workspace.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspaceConfiguration {
+    pub tabs: Vec<ChartTabConfiguration>,
+    pub active_tab_id: u32,
+}
+
+impl Default for WorkspaceConfiguration {
+    fn default() -> Self {
+        Self {
+            tabs: vec![ChartTabConfiguration::default()],
+            active_tab_id: 1,
+        }
+    }
+}
+
+impl WorkspaceConfiguration {
+    fn validate(&self) -> Result<(), PersistenceError> {
+        if self.tabs.is_empty() || self.tabs.len() > MAX_CHART_TABS {
+            return Err(PersistenceError::InvalidPreference("workspace.tabs"));
+        }
+
+        let mut ids = HashSet::with_capacity(self.tabs.len());
+        for tab in &self.tabs {
+            tab.validate()?;
+            if !ids.insert(tab.id) {
+                return Err(PersistenceError::InvalidPreference("workspace.tabs.id"));
+            }
+        }
+        if !ids.contains(&self.active_tab_id) {
+            return Err(PersistenceError::InvalidPreference(
+                "workspace.active_tab_id",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ChartTabConfiguration {
+    pub id: u32,
+    pub provider: String,
+    pub symbol: String,
+    pub interval: String,
+    pub signals_visible: bool,
+    pub viewport: ChartViewportConfiguration,
+}
+
+impl Default for ChartTabConfiguration {
+    fn default() -> Self {
+        Self {
+            id: 1,
+            provider: "binance".to_owned(),
+            symbol: "BTCUSDT".to_owned(),
+            interval: "1h".to_owned(),
+            signals_visible: true,
+            viewport: ChartViewportConfiguration::default(),
+        }
+    }
+}
+
+impl ChartTabConfiguration {
+    fn validate(&self) -> Result<(), PersistenceError> {
+        if self.id == 0 {
+            return Err(PersistenceError::InvalidPreference("workspace.tabs.id"));
+        }
+        validate_identifier("workspace.tabs.provider", &self.provider)?;
+        validate_identifier("workspace.tabs.symbol", &self.symbol)?;
+        validate_identifier("workspace.tabs.interval", &self.interval)?;
+        self.viewport.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ChartViewportConfiguration {
+    pub visible_candle_count: Option<u32>,
+    pub start_timestamp: Option<i64>,
+    pub follow_latest: bool,
+}
+
+impl Default for ChartViewportConfiguration {
+    fn default() -> Self {
+        Self {
+            visible_candle_count: None,
+            start_timestamp: None,
+            follow_latest: true,
+        }
+    }
+}
+
+impl ChartViewportConfiguration {
+    fn validate(&self) -> Result<(), PersistenceError> {
+        if matches!(self.visible_candle_count, Some(count) if count == 0 || count > MAX_VISIBLE_CANDLES)
+        {
+            return Err(PersistenceError::InvalidPreference(
+                "workspace.tabs.viewport.visible_candle_count",
+            ));
+        }
+        if matches!(self.start_timestamp, Some(..=0)) {
+            return Err(PersistenceError::InvalidPreference(
+                "workspace.tabs.viewport.start_timestamp",
+            ));
+        }
+        if self.follow_latest && self.start_timestamp.is_some() {
+            return Err(PersistenceError::InvalidPreference(
+                "workspace.tabs.viewport.start_timestamp",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -200,6 +321,18 @@ fn validate_optional_preference(
     Ok(())
 }
 
+fn validate_identifier(field: &'static str, value: &str) -> Result<(), PersistenceError> {
+    if value.is_empty()
+        || value.len() > MAX_IDENTIFIER_LENGTH
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(PersistenceError::InvalidPreference(field));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum PersistenceError {
     Database(rusqlite::Error),
@@ -316,6 +449,27 @@ mod tests {
             theme: ThemePreference::Dark,
             locale: Some("en-GB".to_owned()),
             time_zone: Some("Europe/Kaliningrad".to_owned()),
+            workspace: WorkspaceConfiguration {
+                tabs: vec![
+                    ChartTabConfiguration {
+                        symbol: "ETHUSDT".to_owned(),
+                        interval: "5m".to_owned(),
+                        signals_visible: false,
+                        viewport: ChartViewportConfiguration {
+                            visible_candle_count: Some(40),
+                            start_timestamp: Some(1_704_067_200_000),
+                            follow_latest: false,
+                        },
+                        ..ChartTabConfiguration::default()
+                    },
+                    ChartTabConfiguration {
+                        id: 2,
+                        symbol: "SOLUSDT".to_owned(),
+                        ..ChartTabConfiguration::default()
+                    },
+                ],
+                active_tab_id: 2,
+            },
         };
 
         {
@@ -338,6 +492,34 @@ mod tests {
         assert!(matches!(
             store.save(&invalid),
             Err(PersistenceError::InvalidPreference("locale"))
+        ));
+        assert_eq!(
+            store.load().expect("load defaults"),
+            UserConfiguration::default()
+        );
+    }
+
+    #[test]
+    fn legacy_configuration_receives_the_default_workspace() {
+        let configuration: UserConfiguration =
+            serde_json::from_str(r#"{"theme":"light","locale":null,"time_zone":null}"#)
+                .expect("deserialize legacy configuration");
+
+        assert_eq!(configuration.workspace, WorkspaceConfiguration::default());
+    }
+
+    #[test]
+    fn invalid_workspace_is_not_saved() {
+        let store = ConfigurationStore::open_in_memory().expect("open database");
+        let mut invalid = UserConfiguration::default();
+        invalid
+            .workspace
+            .tabs
+            .push(ChartTabConfiguration::default());
+
+        assert!(matches!(
+            store.save(&invalid),
+            Err(PersistenceError::InvalidPreference("workspace.tabs.id"))
         ));
         assert_eq!(
             store.load().expect("load defaults"),

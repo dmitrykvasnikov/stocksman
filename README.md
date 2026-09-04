@@ -14,7 +14,7 @@ The built-in `mock` provider exposes BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, and XRP
 
 Historical queries return timestamp-ordered candles with inclusive time bounds and retain the newest candles when a limit is supplied. Replay subscriptions emit fixture events in their original order at a configurable cadence; custom fixtures can therefore reproduce duplicates, revisions, and out-of-order events for the candle-store work.
 
-The desktop chart requests canonical history from `GET /market-data/candles` on the private loopback backend. The endpoint accepts `provider`, `symbol`, and `interval`, plus optional `start_timestamp`, `end_timestamp`, and `limit` query parameters. The same provider-neutral endpoints remain available to offline development and automated tests through the mock provider. Each chart tab independently selects a symbol and interval, controls signal-overlay visibility, and retains its viewport while open. The SVG chart supports drag, keyboard, or button panning; wheel or button zooming; reset and follow-latest modes; and crosshair OHLCV inspection. Workspace persistence remains part of the later chart-workbench phase.
+The desktop chart requests canonical history from `GET /market-data/candles` on the private loopback backend. The endpoint accepts `provider`, `symbol`, and `interval`, plus optional `start_timestamp`, `end_timestamp`, and `limit` query parameters. The same provider-neutral endpoints remain available to offline development and automated tests through the mock provider. Each chart tab independently selects a symbol and interval, controls signal-overlay visibility, and retains its viewport. The active tab and every tab's stream, display, and viewport settings are restored after reopening the app. The SVG chart supports drag, keyboard, or button panning; wheel or button zooming; reset and follow-latest modes; and crosshair OHLCV inspection.
 
 The chart-workbench phase will migrate rendering to the pinned Apache-2.0
 `lightweight-charts` 5.2 dependency. Its candlestick, histogram, crosshair,
@@ -110,7 +110,7 @@ This starts the read-only desktop shell and its private backend companion proces
 
 ## Local configuration
 
-The backend creates `stocksman.sqlite3` in the platform application-data directory and applies embedded migrations before reporting ready. The initial configuration document contains theme, locale, and time-zone preferences; omitted locale and time zone values mean “use the system setting.”
+The backend creates `stocksman.sqlite3` in the platform application-data directory and applies embedded migrations before reporting ready. The configuration document contains theme, locale, time-zone, active-tab, and per-tab chart preferences; omitted locale and time zone values mean “use the system setting.” Existing configuration documents receive a default workspace when first read by a newer version.
 
 The private loopback API exposes `GET /configuration` and `PUT /configuration`. Configuration writes are typed, reject unknown or invalid fields, and are committed to SQLite before a successful response is returned. The database contains configuration only; historical market data remains in-memory for the first release.
 

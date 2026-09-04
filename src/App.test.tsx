@@ -11,6 +11,29 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
 }));
 
+const defaultConfiguration = {
+  theme: "system",
+  locale: null,
+  time_zone: null,
+  workspace: {
+    tabs: [
+      {
+        id: 1,
+        provider: "binance",
+        symbol: "BTCUSDT",
+        interval: "1h",
+        signals_visible: true,
+        viewport: {
+          visible_candle_count: null,
+          start_timestamp: null,
+          follow_latest: true,
+        },
+      },
+    ],
+    active_tab_id: 1,
+  },
+} as const;
+
 afterEach(() => {
   cleanup();
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
@@ -49,8 +72,17 @@ describe("App", () => {
         endpoint: "http://127.0.0.1:49152",
       },
     });
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === "/configuration") {
+        return Promise.resolve(
+          Response.json(
+            init?.method === "PUT" && typeof init.body === "string"
+              ? JSON.parse(init.body)
+              : defaultConfiguration,
+          ),
+        );
+      }
       if (url.pathname === "/market-data/catalog") {
         return Promise.resolve(
           Response.json({
@@ -217,5 +249,131 @@ describe("App", () => {
       "true",
     );
     expect(screen.getByRole("combobox", { name: "Symbol" })).toHaveValue("SOLUSDT");
+  });
+
+  it("restores and saves the active chart workspace", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    invokeMock.mockResolvedValue({
+      application: "Stocksman",
+      runtime: "Rust + Tokio",
+      backend: {
+        state: "ready",
+        endpoint: "http://127.0.0.1:49152",
+      },
+    });
+    const firstTimestamp = 1_704_067_200_000;
+    const restoredConfiguration = {
+      ...defaultConfiguration,
+      theme: "dark",
+      locale: "en-GB",
+      time_zone: "Europe/Kaliningrad",
+      workspace: {
+        tabs: [
+          {
+            id: 7,
+            provider: "binance",
+            symbol: "ETHUSDT",
+            interval: "5m",
+            signals_visible: false,
+            viewport: {
+              visible_candle_count: 30,
+              start_timestamp: firstTimestamp + 5 * 300_000,
+              follow_latest: false,
+            },
+          },
+        ],
+        active_tab_id: 7,
+      },
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === "/configuration") {
+        return Promise.resolve(
+          Response.json(
+            init?.method === "PUT" && typeof init.body === "string"
+              ? JSON.parse(init.body)
+              : restoredConfiguration,
+          ),
+        );
+      }
+      if (url.pathname === "/market-data/catalog") {
+        return Promise.resolve(
+          Response.json({
+            instruments: ["BTC", "ETH"].map((base_asset) => ({
+              provider: "binance",
+              symbol: `${base_asset}USDT`,
+              base_asset,
+              quote_asset: "USDT",
+            })),
+            intervals: [
+              { id: "5m", label: "5 minutes", amount: 5, unit: "minute" },
+              { id: "1h", label: "1 hour", amount: 1, unit: "hour" },
+            ],
+          }),
+        );
+      }
+      return Promise.resolve(
+        Response.json({
+          candles: Array.from({ length: 40 }, (_, index) => ({
+            provider: "binance",
+            symbol: "ETHUSDT",
+            interval: "5m",
+            timestamp: firstTimestamp + index * 300_000,
+            open: 2_000 + index,
+            high: 2_010 + index,
+            low: 1_990 + index,
+            close: 2_005 + index,
+            volume: 100 + index,
+            closed: true,
+          })),
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "ETH / USDT" })).toBeInTheDocument();
+    expect(await screen.findByText("6–35 of 40")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Signal overlays" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(screen.getByRole("switch", { name: "Follow latest candle" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Signal overlays" }));
+
+    await waitFor(() => {
+      const saveCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+      expect(saveCall).toBeDefined();
+      const body = JSON.parse(String(saveCall?.[1]?.body));
+      expect(body).toMatchObject({
+        theme: "dark",
+        locale: "en-GB",
+        time_zone: "Europe/Kaliningrad",
+        workspace: {
+          active_tab_id: 7,
+          tabs: [
+            {
+              id: 7,
+              symbol: "ETHUSDT",
+              interval: "5m",
+              signals_visible: true,
+              viewport: {
+                visible_candle_count: 30,
+                start_timestamp: firstTimestamp + 5 * 300_000,
+                follow_latest: false,
+              },
+            },
+          ],
+        },
+      });
+    });
   });
 });

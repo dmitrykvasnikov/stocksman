@@ -48,14 +48,14 @@ Acceptance criteria:
 - [x] Select and verify a permissively licensed chart library.
 - [x] Add multiple independent tabs.
 - [x] Add symbol, interval, signal visibility, and viewport controls.
-- [ ] Persist tab and display preferences.
+- [x] Persist tab and display preferences.
 - [ ] Add loading, stale, gap, error, and reconnect states.
 
 Acceptance criteria:
 
-- [ ] Each tab has independent symbol, interval, signals, and viewport state.
+- [x] Each tab has independent symbol, interval, signals, and viewport state.
 - [ ] Live updates preserve the viewport unless the user is following the latest candle.
-- [ ] Closing and reopening the app restores persisted workspace configuration.
+- [x] Closing and reopening the app restores persisted workspace configuration.
 
 ## [ ] Phase 4 — Signal DSL and visualization
 
