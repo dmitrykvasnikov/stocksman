@@ -4,6 +4,7 @@ import type { Candle } from "./marketData";
 
 interface CandlestickChartProps {
   candles: Candle[];
+  signalsVisible?: boolean;
 }
 
 interface DragState {
@@ -23,6 +24,7 @@ const VOLUME_HEIGHT = 100;
 const PRICE_TICKS = 5;
 const MIN_VISIBLE_CANDLES = 10;
 const ZOOM_FACTOR = 0.75;
+const PAN_RATIO = 0.2;
 
 function formatPrice(value: number): string {
   const fractionDigits = value >= 1_000 ? 0 : value >= 10 ? 2 : 4;
@@ -49,9 +51,13 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-export default function CandlestickChart({ candles }: CandlestickChartProps) {
+export default function CandlestickChart({
+  candles,
+  signalsVisible = true,
+}: CandlestickChartProps) {
   const [requestedVisibleCount, setRequestedVisibleCount] = useState<number | null>(null);
   const [requestedStartIndex, setRequestedStartIndex] = useState(0);
+  const [isFollowingLatest, setIsFollowingLatest] = useState(true);
   const [inspectedTimestamp, setInspectedTimestamp] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragState = useRef<DragState | null>(null);
@@ -67,7 +73,9 @@ export default function CandlestickChart({ candles }: CandlestickChartProps) {
     candles.length,
   );
   const maximumStartIndex = candles.length - visibleCount;
-  const startIndex = clamp(requestedStartIndex, 0, maximumStartIndex);
+  const startIndex = isFollowingLatest
+    ? maximumStartIndex
+    : clamp(requestedStartIndex, 0, maximumStartIndex);
   const visibleCandles = candles.slice(startIndex, startIndex + visibleCount);
   const inspectedCandle =
     visibleCandles.find((candle) => candle.timestamp === inspectedTimestamp) ??
@@ -97,6 +105,7 @@ export default function CandlestickChart({ candles }: CandlestickChartProps) {
   const isAtDefaultViewport = visibleCount === candles.length && startIndex === 0;
 
   const setViewportStart = (nextStartIndex: number) => {
+    setIsFollowingLatest(false);
     setRequestedStartIndex(clamp(nextStartIndex, 0, maximumStartIndex));
   };
 
@@ -112,6 +121,7 @@ export default function CandlestickChart({ candles }: CandlestickChartProps) {
 
     const anchoredIndex = startIndex + visibleCount * anchorRatio;
     const nextStartIndex = Math.round(anchoredIndex - nextVisibleCount * anchorRatio);
+    setIsFollowingLatest(false);
     setRequestedVisibleCount(nextVisibleCount);
     setRequestedStartIndex(clamp(nextStartIndex, 0, candles.length - nextVisibleCount));
     setInspectedTimestamp(null);
@@ -120,6 +130,19 @@ export default function CandlestickChart({ candles }: CandlestickChartProps) {
   const resetViewport = () => {
     setRequestedVisibleCount(null);
     setRequestedStartIndex(0);
+    setIsFollowingLatest(true);
+    setInspectedTimestamp(null);
+  };
+
+  const followLatest = () => {
+    setRequestedStartIndex(maximumStartIndex);
+    setIsFollowingLatest(true);
+    setInspectedTimestamp(null);
+  };
+
+  const panByPage = (direction: -1 | 1) => {
+    const candleDelta = Math.max(1, Math.round(visibleCount * PAN_RATIO));
+    setViewportStart(startIndex + direction * candleDelta);
     setInspectedTimestamp(null);
   };
 
@@ -216,7 +239,10 @@ export default function CandlestickChart({ candles }: CandlestickChartProps) {
   };
 
   return (
-    <div className="chart-frame">
+    <div
+      className="chart-frame"
+      data-signal-overlays={signalsVisible ? "visible" : "hidden"}
+    >
       <div className="chart-toolbar">
         <div className="chart-readout" aria-label="Inspected candle values" aria-live="polite">
           <span>{formatTime(inspectedCandle.timestamp)}</span>
@@ -242,6 +268,22 @@ export default function CandlestickChart({ candles }: CandlestickChartProps) {
           </span>
           <button
             type="button"
+            aria-label="Pan left"
+            disabled={startIndex === 0}
+            onClick={() => panByPage(-1)}
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            aria-label="Pan right"
+            disabled={startIndex === maximumStartIndex}
+            onClick={() => panByPage(1)}
+          >
+            →
+          </button>
+          <button
+            type="button"
             aria-label="Zoom out"
             disabled={visibleCount === candles.length}
             onClick={() => zoom("out")}
@@ -258,6 +300,23 @@ export default function CandlestickChart({ candles }: CandlestickChartProps) {
           </button>
           <button type="button" disabled={isAtDefaultViewport} onClick={resetViewport}>
             Reset
+          </button>
+          <button
+            className="chart-follow-latest"
+            type="button"
+            role="switch"
+            aria-checked={isFollowingLatest}
+            aria-label="Follow latest candle"
+            onClick={() => {
+              if (isFollowingLatest) {
+                setIsFollowingLatest(false);
+                setRequestedStartIndex(startIndex);
+              } else {
+                followLatest();
+              }
+            }}
+          >
+            Latest
           </button>
         </div>
       </div>

@@ -25,6 +25,7 @@ interface ChartTab {
   id: number;
   symbol: string;
   interval: string;
+  signalsVisible: boolean;
 }
 
 const statusCopy: Record<RuntimeState, string> = {
@@ -117,7 +118,11 @@ function ChartTabPanel({
     >
       <div className="chart-card">
         {candles.length > 0 ? (
-          <CandlestickChart key={`${tab.symbol}-${tab.interval}`} candles={candles} />
+          <CandlestickChart
+            key={`${tab.symbol}-${tab.interval}`}
+            candles={candles}
+            signalsVisible={tab.signalsVisible}
+          />
         ) : (
           <div className="chart-empty" role="status">
             <div className="chart-empty-grid" aria-hidden="true" />
@@ -151,7 +156,12 @@ export default function App() {
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [catalog, setCatalog] = useState<MarketDataCatalog>(fallbackCatalog);
   const [tabs, setTabs] = useState<ChartTab[]>([
-    { id: 1, symbol: DEFAULT_SYMBOL, interval: DEFAULT_INTERVAL },
+    {
+      id: 1,
+      symbol: DEFAULT_SYMBOL,
+      interval: DEFAULT_INTERVAL,
+      signalsVisible: true,
+    },
   ]);
   const [activeTabId, setActiveTabId] = useState(1);
   const nextTabId = useRef(2);
@@ -202,7 +212,7 @@ export default function App() {
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
 
-  const updateActiveTab = (updates: Partial<Pick<ChartTab, "symbol" | "interval">>) => {
+  const updateActiveTab = (updates: Partial<Omit<ChartTab, "id">>) => {
     setTabs((currentTabs) =>
       currentTabs.map((tab) => (tab.id === activeTab.id ? { ...tab, ...updates } : tab)),
     );
@@ -350,6 +360,25 @@ export default function App() {
                 ))}
               </select>
             </label>
+            <div className="signal-visibility-control">
+              <span>Signals</span>
+              <button
+                className="signal-visibility-switch"
+                type="button"
+                role="switch"
+                aria-checked={activeTab.signalsVisible}
+                aria-label="Signal overlays"
+                title="Show or hide this tab's configured signal overlays"
+                onClick={() =>
+                  updateActiveTab({ signalsVisible: !activeTab.signalsVisible })
+                }
+              >
+                <span className="signal-visibility-switch__track" aria-hidden="true">
+                  <span />
+                </span>
+                {activeTab.signalsVisible ? "Visible" : "Hidden"}
+              </button>
+            </div>
             <div className="feed-badge">
               <span>PUBLIC DATA</span>
               <strong>Read-only Binance Spot</strong>

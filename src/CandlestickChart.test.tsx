@@ -30,6 +30,11 @@ describe("CandlestickChart", () => {
 
     expect(screen.getByText("1–40 of 40")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Pan left" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Follow latest candle" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
 
@@ -38,13 +43,47 @@ describe("CandlestickChart", () => {
     });
     expect(screen.getByText("6–35 of 40")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Zoom out" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Follow latest candle" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Pan right" }));
+    expect(screen.getByText("11–40 of 40")).toBeInTheDocument();
 
     fireEvent.keyDown(chart, { key: "ArrowLeft" });
-    expect(screen.getByText("5–34 of 40")).toBeInTheDocument();
+    expect(screen.getByText("10–39 of 40")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));
     expect(screen.getByText("1–40 of 40")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
+  });
+
+  it("preserves a manual viewport across updates and follows new latest candles on demand", () => {
+    const initialCandles = Array.from({ length: 40 }, (_, index) => candle(index));
+    const { rerender } = render(<CandlestickChart candles={initialCandles} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByText("6–35 of 40")).toBeInTheDocument();
+
+    rerender(
+      <CandlestickChart candles={Array.from({ length: 41 }, (_, index) => candle(index))} />,
+    );
+    expect(screen.getByText("6–35 of 41")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Follow latest candle" }));
+    expect(screen.getByText("12–41 of 41")).toBeInTheDocument();
+
+    rerender(
+      <CandlestickChart candles={Array.from({ length: 42 }, (_, index) => candle(index))} />,
+    );
+    expect(screen.getByText("13–42 of 42")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Follow latest candle" }));
+    rerender(
+      <CandlestickChart candles={Array.from({ length: 43 }, (_, index) => candle(index))} />,
+    );
+    expect(screen.getByText("13–42 of 43")).toBeInTheDocument();
   });
 
   it("updates the OHLCV readout for the inspected candle", () => {

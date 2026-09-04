@@ -136,6 +136,10 @@ describe("App", () => {
     expect(screen.getByRole("option", { name: "1 second" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "1 month" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Timeframe" }).children).toHaveLength(16);
+    expect(screen.getByRole("switch", { name: "Signal overlays" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     fireEvent.change(screen.getByRole("combobox", { name: "Symbol" }), {
       target: { value: "ETHUSDT" },
     });
@@ -150,6 +154,15 @@ describe("App", () => {
     expect(
       await screen.findByRole("img", { name: /2 candle price and volume chart for ethusdt/i }),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Signal overlays" }));
+    expect(screen.getByRole("switch", { name: "Signal overlays" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(document.querySelector(".chart-frame")).toHaveAttribute(
+      "data-signal-overlays",
+      "hidden",
+    );
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -168,6 +181,12 @@ describe("App", () => {
       "aria-selected",
       "true",
     );
+    expect(screen.getByRole("switch", { name: "Signal overlays" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Signal overlays" }));
 
     fireEvent.change(screen.getByRole("combobox", { name: "Symbol" }), {
       target: { value: "SOLUSDT" },
@@ -185,6 +204,10 @@ describe("App", () => {
     fireEvent.click(firstTab);
     expect(screen.getByRole("combobox", { name: "Symbol" })).toHaveValue("ETHUSDT");
     expect(screen.getByRole("combobox", { name: "Timeframe" })).toHaveValue("5m");
+    expect(screen.getByRole("switch", { name: "Signal overlays" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
     expect(firstTab).toHaveAttribute("aria-selected", "true");
 
     fireEvent.click(screen.getByRole("button", { name: /close eth \/ usdt 5m chart tab/i }));

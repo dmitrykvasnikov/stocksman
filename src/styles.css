@@ -259,7 +259,8 @@ h1 {
   gap: 6px;
 }
 
-.chart-controls label > span {
+.chart-controls label > span,
+.signal-visibility-control > span {
   color: #5f6d83;
   font-size: 0.62rem;
   font-weight: 760;
@@ -282,6 +283,59 @@ h1 {
 .chart-controls select:hover,
 .chart-controls select:focus-visible {
   border-color: #3e8d82;
+}
+
+.signal-visibility-control {
+  display: grid;
+  gap: 6px;
+}
+
+.signal-visibility-switch {
+  display: flex;
+  min-width: 108px;
+  height: 35px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid #263246;
+  border-radius: 8px;
+  color: #c5d0df;
+  background: #0d131d;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.signal-visibility-switch:hover,
+.signal-visibility-switch:focus-visible {
+  border-color: #3e8d82;
+  outline: none;
+}
+
+.signal-visibility-switch__track {
+  width: 26px;
+  padding: 2px;
+  border-radius: 999px;
+  background: #354156;
+  transition: background 160ms ease;
+}
+
+.signal-visibility-switch__track > span {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #8996aa;
+  transition: translate 160ms ease, background 160ms ease;
+}
+
+.signal-visibility-switch[aria-checked="true"] .signal-visibility-switch__track {
+  background: rgb(67 215 177 / 28%);
+}
+
+.signal-visibility-switch[aria-checked="true"] .signal-visibility-switch__track > span {
+  translate: 12px 0;
+  background: #43d7b1;
 }
 
 .feed-badge {
@@ -386,6 +440,12 @@ h1 {
 .chart-viewport-controls button:disabled {
   opacity: 0.38;
   cursor: default;
+}
+
+.chart-viewport-controls .chart-follow-latest[aria-checked="true"] {
+  border-color: rgb(67 215 177 / 52%);
+  color: #7ce8cd;
+  background: rgb(67 215 177 / 9%);
 }
 
 .candlestick-chart {
@@ -573,6 +633,10 @@ footer {
 
   .chart-controls label {
     flex: 1;
+  }
+
+  .signal-visibility-control {
+    flex: 0 0 108px;
   }
 
   .chart-controls select {
