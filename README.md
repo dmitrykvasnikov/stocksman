@@ -16,6 +16,12 @@ Historical queries return timestamp-ordered candles with inclusive time bounds a
 
 The desktop chart requests canonical history from `GET /market-data/candles` on the private loopback backend. The endpoint accepts `provider`, `symbol`, and `interval`, plus optional `start_timestamp`, `end_timestamp`, and `limit` query parameters. The same provider-neutral endpoints remain available to offline development and automated tests through the mock provider. The SVG chart supports drag or arrow-key panning, wheel or button zooming, viewport reset, and crosshair OHLCV inspection. Tab persistence and multiple independent tabs remain part of the later chart-workbench phase.
 
+The chart-workbench phase will migrate rendering to the pinned Apache-2.0
+`lightweight-charts` 5.2 dependency. Its candlestick, histogram, crosshair,
+viewport, marker, and primitive APIs are checked by
+`src/chartLibraryCompatibility.test.ts`; the selection rationale and attribution
+requirements are recorded in [`DECISIONS.md`](DECISIONS.md#d010--chart-library-constraint).
+
 The provider-neutral in-memory store accepts historical batches and live upserts. A batch is fully validated before it changes the cache. Snapshots are ordered by UTC opening timestamp, exact duplicate events are ignored, and a later value for the same provider, symbol, interval, and timestamp replaces the earlier revision. An integration test feeds deliberately duplicated and out-of-order mock replay events through this boundary and verifies the resulting ordered series. Gap detection uses the provider's interval definition, including real UTC calendar-month boundaries.
 
 ## Binance historical data

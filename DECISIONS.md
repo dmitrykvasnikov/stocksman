@@ -46,7 +46,35 @@ Signal text is parsed into a versioned AST and evaluated by an explicit interpre
 
 ## D010 — Chart library constraint
 
-Select a maintained chart library with a permissive license suitable for redistribution, after verifying candlestick, volume, crosshair, pan/zoom, custom markers, and optional span rendering requirements.
+Use TradingView Lightweight Charts 5.2, pinned through the npm lockfile. It is
+maintained, ships TypeScript declarations, and is licensed under Apache-2.0.
+The verification is based on the upstream
+[5.2 package metadata](https://github.com/tradingview/lightweight-charts/blob/v5.2.0/package.json),
+[license and attribution guidance](https://tradingview.github.io/lightweight-charts/docs#license-and-attribution),
+and [v5 API documentation](https://tradingview.github.io/lightweight-charts/docs/api).
+
+The v5 API covers the workbench requirements without provider coupling:
+
+| Requirement | Verified API |
+| --- | --- |
+| Candlesticks | built-in `CandlestickSeries` |
+| Volume | built-in `HistogramSeries`, placed in a separate pane |
+| Crosshair and tooltips | crosshair subscriptions plus application-rendered readouts |
+| Pan and zoom | time-scale scrolling/scaling and visible-range APIs |
+| Newest-candle signal markers | `createSeriesMarkers` |
+| Optional full-pattern spans | [series primitives](https://tradingview.github.io/lightweight-charts/docs/plugins/series-primitives) with background pane renderers |
+| Live updates and backfill | series `update`/`setData` and visible-range subscriptions |
+
+The existing SVG chart remains in place until the chart-workbench migration; this
+decision establishes the supported rendering dependency and API seam rather than
+combining selection with a broad UI rewrite. Keep provider-neutral canonical
+candles at the component boundary and convert timestamps to Lightweight Charts'
+UTC-seconds representation only inside the chart adapter.
+
+Redistributions must retain the Apache-2.0 license and the upstream NOTICE
+attribution, including the TradingView creator credit and link required by the
+project's licensing guidance. Add that credit to the application's public
+third-party notices/about surface when the library-backed chart ships.
 
 ## D011 — Decision logging practice
 
