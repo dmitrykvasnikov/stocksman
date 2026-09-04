@@ -1270,16 +1270,26 @@ mod tests {
     fn adapter_exposes_configured_symbols_and_all_spot_kline_intervals() {
         let provider = BinanceSpotProvider::new().expect("provider");
 
-        assert_eq!(provider.list_symbols().expect("symbols").len(), 5);
-        assert_eq!(provider.list_intervals().expect("intervals").len(), 16);
+        assert_eq!(
+            provider
+                .list_symbols()
+                .expect("symbols")
+                .iter()
+                .map(|instrument| instrument.symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+        );
         assert_eq!(
             provider
                 .list_intervals()
                 .expect("intervals")
-                .last()
-                .expect("monthly interval")
-                .id,
-            "1M"
+                .iter()
+                .map(|interval| interval.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "1s", "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d",
+                "3d", "1w", "1M"
+            ]
         );
     }
 }

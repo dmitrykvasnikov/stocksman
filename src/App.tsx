@@ -23,12 +23,12 @@ interface RuntimeInfo {
 
 const statusCopy: Record<RuntimeState, string> = {
   reconnecting: "Backend reconnecting…",
-  ready: "Mock feed ready",
+  ready: "Binance feed ready",
   browser: "Browser preview",
   unavailable: "Backend unavailable",
 };
 
-const PROVIDER = "mock";
+const PROVIDER = "binance";
 const DEFAULT_SYMBOL = "BTCUSDT";
 const DEFAULT_INTERVAL = "1h";
 
@@ -177,7 +177,7 @@ export default function App() {
               {selectedInstrument.base_asset} / {selectedInstrument.quote_asset}
             </h1>
             <p className="market-meta">
-              {selectedInstrument.symbol} · Mock replay · {selectedInterval.label}
+              {selectedInstrument.symbol} · Binance Spot · {selectedInterval.label}
             </p>
           </div>
           <div className="chart-controls" aria-label="Chart configuration">
@@ -216,8 +216,8 @@ export default function App() {
               </select>
             </label>
             <div className="feed-badge">
-              <span>OFFLINE DATA</span>
-              <strong>Deterministic replay</strong>
+              <span>PUBLIC DATA</span>
+              <strong>Read-only Binance Spot</strong>
             </div>
           </div>
         </div>
@@ -232,13 +232,13 @@ export default function App() {
                 {chartError
                   ? "Candle history is unavailable"
                   : runtimeState === "browser"
-                    ? "Open the desktop app to load the offline replay"
-                    : "Loading deterministic candles…"}
+                    ? "Open the desktop app to load Binance Spot data"
+                    : "Loading Binance candles…"}
               </strong>
               <span>
                 {chartError
                   ? "The chart will retry when the local backend reconnects."
-                  : "No Binance connection or credentials are required."}
+                  : "No Binance account or credentials are required."}
               </span>
             </div>
           )}

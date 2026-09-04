@@ -32,7 +32,7 @@ describe("App", () => {
       "aria-selected",
       "true",
     );
-    expect(screen.getByText(/open the desktop app to load the offline replay/i)).toBeInTheDocument();
+    expect(screen.getByText(/open the desktop app to load binance spot data/i)).toBeInTheDocument();
     expect(screen.getByText(/no accounts · no api keys · no trading/i)).toBeInTheDocument();
   });
 
@@ -54,23 +54,29 @@ describe("App", () => {
       if (url.pathname === "/market-data/catalog") {
         return Promise.resolve(
           Response.json({
-            instruments: [
-              {
-                provider: "mock",
-                symbol: "BTCUSDT",
-                base_asset: "BTC",
-                quote_asset: "USDT",
-              },
-              {
-                provider: "mock",
-                symbol: "ETHUSDT",
-                base_asset: "ETH",
-                quote_asset: "USDT",
-              },
-            ],
+            instruments: ["BTC", "ETH", "BNB", "SOL", "XRP"].map((base_asset) => ({
+              provider: "binance",
+              symbol: `${base_asset}USDT`,
+              base_asset,
+              quote_asset: "USDT",
+            })),
             intervals: [
+              { id: "1s", label: "1 second", amount: 1, unit: "second" },
+              { id: "1m", label: "1 minute", amount: 1, unit: "minute" },
+              { id: "3m", label: "3 minutes", amount: 3, unit: "minute" },
               { id: "5m", label: "5 minutes", amount: 5, unit: "minute" },
+              { id: "15m", label: "15 minutes", amount: 15, unit: "minute" },
+              { id: "30m", label: "30 minutes", amount: 30, unit: "minute" },
               { id: "1h", label: "1 hour", amount: 1, unit: "hour" },
+              { id: "2h", label: "2 hours", amount: 2, unit: "hour" },
+              { id: "4h", label: "4 hours", amount: 4, unit: "hour" },
+              { id: "6h", label: "6 hours", amount: 6, unit: "hour" },
+              { id: "8h", label: "8 hours", amount: 8, unit: "hour" },
+              { id: "12h", label: "12 hours", amount: 12, unit: "hour" },
+              { id: "1d", label: "1 day", amount: 1, unit: "day" },
+              { id: "3d", label: "3 days", amount: 3, unit: "day" },
+              { id: "1w", label: "1 week", amount: 1, unit: "week" },
+              { id: "1M", label: "1 month", amount: 1, unit: "month" },
             ],
           }),
         );
@@ -82,7 +88,7 @@ describe("App", () => {
         Response.json({
           candles: [
             {
-              provider: "mock",
+              provider: "binance",
               symbol,
               interval,
               timestamp: 1_704_492_000_000,
@@ -94,7 +100,7 @@ describe("App", () => {
               closed: true,
             },
             {
-              provider: "mock",
+              provider: "binance",
               symbol,
               interval,
               timestamp: 1_704_495_600_000,
@@ -113,19 +119,23 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Mock feed ready")).toBeInTheDocument();
+    expect(await screen.findByText("Binance feed ready")).toBeInTheDocument();
     expect(
       await screen.findByRole("img", { name: /2 candle price and volume chart for btcusdt/i }),
     ).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("runtime_info");
     expect(fetchMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        href: expect.stringContaining("/market-data/candles?"),
+        href: expect.stringMatching(/\/market-data\/candles\?.*provider=binance/),
       }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
 
-    expect(await screen.findByRole("option", { name: "ETH / USDT" })).toBeInTheDocument();
+    expect(await screen.findAllByRole("option", { name: /\/ USDT$/ })).toHaveLength(5);
+    expect(screen.getByRole("option", { name: "XRP / USDT" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "1 second" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "1 month" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Timeframe" }).children).toHaveLength(16);
     fireEvent.change(screen.getByRole("combobox", { name: "Symbol" }), {
       target: { value: "ETHUSDT" },
     });
@@ -136,7 +146,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "ETH / USDT" }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("ETHUSDT · Mock replay · 5 minutes")).toBeInTheDocument();
+    expect(await screen.findByText("ETHUSDT · Binance Spot · 5 minutes")).toBeInTheDocument();
     expect(
       await screen.findByRole("img", { name: /2 candle price and volume chart for ethusdt/i }),
     ).toBeInTheDocument();

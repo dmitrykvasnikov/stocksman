@@ -29,19 +29,19 @@ Acceptance criteria:
 - [x] Duplicate and out-of-order events produce one correctly ordered candle series.
 - [x] The chart can pan, zoom, reset, and inspect OHLCV values.
 
-## [ ] Phase 2 — Binance Spot adapter
+## [x] Phase 2 — Binance Spot adapter
 
 - [x] Implement public REST historical backfill.
 - [x] Implement WebSocket kline subscriptions.
 - [x] Normalize all provider events into canonical candles.
 - [x] Add reconnect, overlap resynchronization, rate-limit, missing-candle, and revision handling.
-- [ ] Load the five configured default pairs and every interval supported by the adapter.
+- [x] Load the five configured default pairs and every interval supported by the adapter.
 
 Acceptance criteria:
 
-- [ ] Historical candles load and live closed-candle updates arrive for each default pair.
-- [ ] Reconnects do not create duplicates or silently lose a candle range.
-- [ ] Provider-specific types remain inside the Binance adapter.
+- [x] Historical candles load and live closed-candle updates arrive for each default pair.
+- [x] Reconnects do not create duplicates or silently lose a candle range.
+- [x] Provider-specific types remain inside the Binance adapter.
 
 ## [ ] Phase 3 — Chart workbench
 

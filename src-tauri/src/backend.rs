@@ -500,7 +500,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_catalog_is_available_over_http() {
+    async fn provider_catalogs_are_available_over_http() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("bind loopback listener");
@@ -519,6 +519,39 @@ mod tests {
         assert_eq!(catalog.instruments[0].symbol, "BTCUSDT");
         assert_eq!(catalog.intervals.len(), 4);
         assert_eq!(catalog.intervals[2].id, "1h");
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind loopback listener");
+        let response = request(
+            listener,
+            "GET /market-data/catalog?provider=binance HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        )
+        .await;
+        let (_, body) = response.split_once("\r\n\r\n").expect("HTTP response body");
+        let catalog: MarketDataCatalog =
+            serde_json::from_str(body).expect("market-data catalog JSON");
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert_eq!(
+            catalog
+                .instruments
+                .iter()
+                .map(|instrument| instrument.symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+        );
+        assert_eq!(
+            catalog
+                .intervals
+                .iter()
+                .map(|interval| interval.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "1s", "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d",
+                "3d", "1w", "1M"
+            ]
+        );
     }
 
     #[tokio::test]
